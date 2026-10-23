@@ -15,93 +15,72 @@ export default {
     }
 
     try {
-      // 1. FITUR PENCARIAN KHUSUS LAGU RESMI (- TOPIC / YOUTUBE MUSIC)
+      // FITUR 1: PENCARIAN KHUSUS YOUTUBE MUSIC (MUSIC ONLY)
       if (q) {
-        // Query dipaksa mencari lagu dari channel Topic resmi
-        const searchQuery = `${q} Topic`;
-
-        const ytRes = await fetch('https://www.youtube.com/youtubei/v1/search?prettyPrint=false', {
+        const response = await fetch('https://music.youtube.com/youtubei/v1/search?prettyPrint=false', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7'
+            'X-YouTube-Client-Name': '67',
+            'X-YouTube-Client-Version': '1.20240101.01.00'
           },
           body: JSON.stringify({
             context: {
               client: {
-                clientName: 'WEB',
-                clientVersion: '2.20240101.00.00',
+                clientName: 'WEB_REMIX',
+                clientVersion: '1.20240101.01.00',
                 hl: 'id',
                 gl: 'ID'
               }
             },
-            query: searchQuery
+            query: q,
+            params: "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D" // Parameter wajib untuk menyaring HANYA LAGU RESMI (Songs)
           })
         });
 
-        const ytData = await ytRes.json();
-        const contents = ytData?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents || [];
-
+        const data = await response.json();
+        
+        // Parsing hasil khusus YouTube Music
+        const shelf = data?.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
+        
         const tracks = [];
 
-        for (const item of contents) {
-          const video = item.videoRenderer;
-          if (video && video.videoId) {
-            const rawArtist = video.ownerText?.runs?.[0]?.text || '';
-            const title = video.title?.runs?.[0]?.text || '';
-
-            // SYARAT KETAT: Harus dari channel "- Topic" atau rilis resmi
-            const isTopicChannel = rawArtist.includes('- Topic') || rawArtist.includes('Topic');
-
-            // Abaikan jika video berasal dari Indosiar / TV / Video Klip Sinematik biasa jika kita cuma mau lagu
-            if (isTopicChannel) {
-              const durationText = video.lengthText?.simpleText || '0:00';
-              const parts = durationText.split(':').map(Number);
-              let durationSeconds = 0;
-              if (parts.length === 2) durationSeconds = parts[0] * 60 + parts[1];
-              if (parts.length === 3) durationSeconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
-
-              tracks.push({
-                id: video.videoId,
-                title: title,
-                artist: rawArtist.replace(' - Topic', '').replace('- Topic', '').trim(),
-                thumbnail: `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
-                duration: durationSeconds,
-                isOfficialTopic: true
-              });
-            }
-          }
-        }
-
-        // Jika hasil filter ketat "- Topic" tidak ditemukan, ambil pencarian fallback dengan pembersihan
-        if (tracks.length === 0) {
+        for (const section of shelf) {
+          const contents = section?.musicShelfRenderer?.contents || [];
           for (const item of contents) {
-            const video = item.videoRenderer;
-            if (video && video.videoId) {
-              const rawArtist = video.ownerText?.runs?.[0]?.text || '';
-              const title = video.title?.runs?.[0]?.text || '';
+            const listItem = item?.musicResponsiveListItemRenderer;
+            if (!listItem) continue;
 
+            const videoId = listItem?.playlistItemData?.videoId || 
+                            listItem?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId;
+
+            const title = listItem?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text;
+            
+            // Mengambil info Artis & Album dari YouTube Music
+            const flexRuns = listItem?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
+            const artist = flexRuns.map(r => r.text).join('').replace(' • ', ' - ').replace(' - Topic', '').trim();
+
+            if (videoId && title) {
               tracks.push({
-                id: video.videoId,
+                id: videoId,
                 title: title,
-                artist: rawArtist.replace(' - Topic', '').trim(),
-                thumbnail: `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
-                duration: 0,
-                isOfficialTopic: false
+                artist: artist || "Official Artist",
+                thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                isMusicTrack: true
               });
             }
           }
         }
 
         if (tracks.length === 0) {
-          return new Response(JSON.stringify({ error: "Lagu tidak ditemukan." }), { status: 404, headers });
+          return new Response(JSON.stringify({ error: "Lagu resmi tidak ditemukan / API dibatasi oleh YouTube." }), { status: 404, headers });
         }
 
         return new Response(JSON.stringify(tracks), { headers });
       }
 
-      // 2. FITUR STREAM AUDIO
+      // FITUR 2: STREAM AUDIO
       if (id) {
         let audioUrl = null;
 
@@ -123,28 +102,6 @@ export default {
         } catch (e) {}
 
         if (!audioUrl) {
-          const fallbackInstances = [
-            `https://invidious.privacydev.net/api/v1/videos/${id}`,
-            `https://vid.pugil.cc/api/v1/videos/${id}`
-          ];
-
-          for (const instance of fallbackInstances) {
-            try {
-              const res = await fetch(instance);
-              if (res.ok) {
-                const data = await res.json();
-                const adaptive = data.adaptiveFormats || [];
-                const audio = adaptive.filter(f => f.type?.includes('audio')).pop();
-                if (audio && audio.url) {
-                  audioUrl = audio.url;
-                  break;
-                }
-              }
-            } catch (e) { continue; }
-          }
-        }
-
-        if (!audioUrl) {
           return new Response(JSON.stringify({ error: "Gagal mengambil stream audio." }), { status: 500, headers });
         }
 
@@ -155,10 +112,10 @@ export default {
         }), { headers });
       }
 
-      return new Response(JSON.stringify({ error: "Gunakan ?q= untuk mencari lagu resmi atau ?id= untuk memutar." }), { headers });
+      return new Response(JSON.stringify({ error: "Gunakan ?q= untuk mencari lagu atau ?id= untuk memutar." }), { headers });
 
     } catch (err) {
-      return new Response(JSON.stringify({ error: "Internal Error: " + err.message }), { status: 500, headers });
+      return new Response(JSON.stringify({ error: err.message }), { status: 500, headers });
     }
   }
 };
