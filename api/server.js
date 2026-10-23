@@ -15,7 +15,7 @@ export default {
     }
 
     try {
-      // FITUR 1: PENCARIAN LANGSUNG KE YOUTUBE (INNERTUBE API)
+      // 1. PENCARIAN KHUSUS YOUTUBE MUSIC (OFFICIAL SONGS / TOPIC ONLY)
       if (q) {
         const ytRes = await fetch('https://www.youtube.com/youtubei/v1/search?prettyPrint=false', {
           method: 'POST',
@@ -26,17 +26,21 @@ export default {
           body: JSON.stringify({
             context: {
               client: {
-                clientName: 'WEB',
-                clientVersion: '2.20240101.00.00',
+                clientName: 'WEB_REMIX', // Mode YouTube Music
+                clientVersion: '1.20240101.01.00',
                 hl: 'id',
                 gl: 'ID'
               }
             },
-            query: `${q} Official Audio`
+            query: q,
+            // Filter rahasia YouTube untuk memunculkan HANYA kategori "Lagu Resmi" (Songs)
+            params: "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D" 
           })
         });
 
         const ytData = await ytRes.json();
+        
+        // Ekstraksi data hasil pencarian
         const contents = ytData?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents || [];
 
         const tracks = [];
@@ -45,10 +49,13 @@ export default {
           const video = item.videoRenderer;
           if (video && video.videoId) {
             const title = video.title?.runs?.[0]?.text || 'Unknown Title';
-            const artist = video.ownerText?.runs?.[0]?.text ? video.ownerText.runs[0].text.replace(' - Topic', '') : 'Unknown Artist';
-            const durationText = video.lengthText?.simpleText || '0:00';
             
-            // Konversi durasi teks (contoh "3:45") ke detik
+            // Mengambil nama artis dan membersihkan teks "- Topic"
+            let rawArtist = video.ownerText?.runs?.[0]?.text || video.longBylineText?.runs?.[0]?.text || 'Unknown Artist';
+            const cleanArtist = rawArtist.replace(' - Topic', '').trim();
+
+            // Memastikan durasi berbentuk detik
+            const durationText = video.lengthText?.simpleText || '0:00';
             const parts = durationText.split(':').map(Number);
             let durationSeconds = 0;
             if (parts.length === 2) durationSeconds = parts[0] * 60 + parts[1];
@@ -57,33 +64,28 @@ export default {
             tracks.push({
               id: video.videoId,
               title: title,
-              artist: artist,
+              artist: cleanArtist,
+              // Mengambil thumbnail kualitas tinggi dari album resmi
               thumbnail: `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
-              duration: durationSeconds
+              duration: durationSeconds,
+              isOfficial: true
             });
           }
         }
 
+        // Jika filter ketat kosong, coba cari tanpa parameter
         if (tracks.length === 0) {
-          return new Response(JSON.stringify({ error: "Lagu tidak ditemukan." }), { status: 404, headers });
+          return new Response(JSON.stringify({ error: "Lagu resmi tidak ditemukan." }), { status: 404, headers });
         }
 
         return new Response(JSON.stringify(tracks), { headers });
       }
 
-      // FITUR 2: STREAM AUDIO VIA COBALT / INVIDIOUS FALLBACK
+      // 2. STREAM AUDIO LINK
       if (id) {
-        const STREAM_APIS = [
-          `https://api.cobalt.tools/api/json`,
-          `https://invidious.privacydev.net/api/v1/videos/${id}`,
-          `https://vid.pugil.cc/api/v1/videos/${id}`
-        ];
-
         let audioUrl = null;
-        let title = "";
-        let artist = "";
 
-        // Opsi A: Coba via Cobalt API
+        // Mencoba Cobalt API dulu
         try {
           const cobaltRes = await fetch("https://api.cobalt.tools/api/json", {
             method: "POST",
@@ -106,9 +108,14 @@ export default {
           }
         } catch (e) {}
 
-        // Opsi B: Fallback ke Invidious jika Cobalt gagal
+        // Fallback jika Cobalt sibuk
         if (!audioUrl) {
-          for (const instance of [STREAM_APIS[1], STREAM_APIS[2]]) {
+          const fallbackInstances = [
+            `https://invidious.privacydev.net/api/v1/videos/${id}`,
+            `https://vid.pugil.cc/api/v1/videos/${id}`
+          ];
+
+          for (const instance of fallbackInstances) {
             try {
               const res = await fetch(instance);
               if (res.ok) {
@@ -117,8 +124,6 @@ export default {
                 const audio = adaptive.filter(f => f.type?.includes('audio')).pop();
                 if (audio && audio.url) {
                   audioUrl = audio.url;
-                  title = data.title;
-                  artist = data.author ? data.author.replace(' - Topic', '') : '';
                   break;
                 }
               }
@@ -127,19 +132,17 @@ export default {
         }
 
         if (!audioUrl) {
-          return new Response(JSON.stringify({ error: "Gagal mengambil link audio." }), { status: 500, headers });
+          return new Response(JSON.stringify({ error: "Gagal mengambil stream audio." }), { status: 500, headers });
         }
 
         return new Response(JSON.stringify({
           id: id,
-          title: title || "Audio Track",
-          artist: artist || "Artist",
           coverUrl: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
           audioUrl: audioUrl
         }), { headers });
       }
 
-      return new Response(JSON.stringify({ error: "Gunakan ?q= untuk mencari atau ?id= untuk memutar lagu." }), { headers });
+      return new Response(JSON.stringify({ error: "Gunakan ?q= untuk mencari lagu resmi atau ?id= untuk memutar." }), { headers });
 
     } catch (err) {
       return new Response(JSON.stringify({ error: "Internal Error: " + err.message }), { status: 500, headers });
