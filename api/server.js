@@ -1,63 +1,87 @@
-export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    const q = url.searchParams.get('q');
+    const id = url.searchParams.get('id');
 
-  const { q, id } = req.query;
+    const headers = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Content-Type': 'application/json'
+    };
 
-  try {
-    const PIPED_API = "https://pipedapi.kavin.rocks";
-
-    // FITUR 1: Pencarian lagu resmi dari YouTube Music (?q=judul_lagu)
-    if (q) {
-      // Menambahkan keyword agar memprioritaskan rilisan resmi (Topic)
-      const searchQuery = `${q} Topic Official Audio`;
-      const searchRes = await fetch(`${PIPED_API}/search?q=${encodeURIComponent(searchQuery)}&filter=music_songs`);
-      const searchData = await searchRes.json();
-
-      const officialTracks = (searchData.items || [])
-        .filter(item => item.type === 'stream')
-        .map(item => {
-          // Membersihkan string " - Topic" pada nama artist
-          const cleanArtist = item.uploaderName ? item.uploaderName.replace(' - Topic', '') : 'Unknown Artist';
-          
-          return {
-            id: item.url.replace('/watch?v=', ''),
-            title: item.title,
-            artist: cleanArtist,
-            thumbnail: item.thumbnail,
-            duration: item.duration,
-            isOfficial: item.uploaderName?.includes('Topic') || item.uploaderVerified
-          };
-        });
-
-      return res.status(200).json(officialTracks);
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { headers });
     }
 
-    // FITUR 2: Ambil Direct Audio Stream Full & Cover HD (?id=video_id)
-    if (id) {
-      const streamRes = await fetch(`${PIPED_API}/streams/${id}`);
-      const streamData = await streamRes.json();
-      
-      const audioStreams = streamData.audioStreams || [];
-      const bestAudio = audioStreams.find(s => s.mimeType?.includes('audio/mp4')) || audioStreams[0];
+    const API_INSTANCES = [
+      "https://pipedapi.kavin.rocks",
+      "https://pipedapi.leptons.xyz",
+      "https://piped-api.privacy.com.de"
+    ];
 
-      return res.status(200).json({
-        id: id,
-        title: streamData.title,
-        artist: streamData.uploader ? streamData.uploader.replace(' - Topic', '') : '',
-        coverUrl: streamData.thumbnailUrl,
-        duration: streamData.duration,
-        audioUrl: bestAudio ? bestAudio.url : null
-      });
+    try {
+      if (q) {
+        let searchData = null;
+        for (const instance of API_INSTANCES) {
+          try {
+            const res = await fetch(`${instance}/search?q=${encodeURIComponent(q + " Topic Official Audio")}`);
+            const text = await res.text();
+            if (text.startsWith('{') || text.startsWith('[')) {
+              searchData = JSON.parse(text);
+              break;
+            }
+          } catch (e) { continue; }
+        }
+
+        if (!searchData) {
+          return new Response(JSON.stringify({ error: "Server sibuk" }), { status: 500, headers });
+        }
+
+        const tracks = (searchData.items || []).filter(item => item.type === 'stream').map(item => ({
+          id: item.url ? item.url.replace('/watch?v=', '') : '',
+          title: item.title || 'Unknown',
+          artist: item.uploaderName ? item.uploaderName.replace(' - Topic', '') : 'Unknown',
+          thumbnail: item.thumbnail || '',
+          duration: item.duration || 0
+        }));
+
+        return new Response(JSON.stringify(tracks), { headers });
+      }
+
+      if (id) {
+        let streamData = null;
+        for (const instance of API_INSTANCES) {
+          try {
+            const res = await fetch(`${instance}/streams/${id}`);
+            const text = await res.text();
+            if (text.startsWith('{') || text.startsWith('[')) {
+              streamData = JSON.parse(text);
+              break;
+            }
+          } catch (e) { continue; }
+        }
+
+        if (!streamData) {
+          return new Response(JSON.stringify({ error: "Gagal stream" }), { status: 500, headers });
+        }
+
+        const audioStreams = streamData.audioStreams || [];
+        const bestAudio = audioStreams.find(s => s.mimeType?.includes('audio/mp4')) || audioStreams[0];
+
+        return new Response(JSON.stringify({
+          id,
+          title: streamData.title,
+          artist: streamData.uploader ? streamData.uploader.replace(' - Topic', '') : '',
+          coverUrl: streamData.thumbnailUrl,
+          audioUrl: bestAudio ? bestAudio.url : null
+        }), { headers });
+      }
+
+      return new Response(JSON.stringify({ error: "Gunakan ?q= atau ?id=" }), { headers });
+
+    } catch (err) {
+      return new Response(JSON.stringify({ error: err.message }), { status: 500, headers });
     }
-
-    return res.status(400).json({ error: "Gunakan parameter ?q= untuk mencari atau ?id= untuk memutar lagu." });
-
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
   }
-}
+};
