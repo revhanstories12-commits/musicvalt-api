@@ -15,9 +15,9 @@ export default {
     }
 
     try {
-      // 1. PENCARIAN KHUSUS YOUTUBE MUSIC (OFFICIAL SONGS / TOPIC ONLY)
+      // 1. FITUR PENCARIAN LAGU RESMI YOUTUBE MUSIC
       if (q) {
-        const ytRes = await fetch('https://www.youtube.com/youtubei/v1/search?prettyPrint=false', {
+        const ytRes = await fetch('https://music.youtube.com/youtubei/v1/search?prettyPrint=false', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -26,73 +26,104 @@ export default {
           body: JSON.stringify({
             context: {
               client: {
-                clientName: 'WEB_REMIX', // Mode YouTube Music
+                clientName: 'WEB_REMIX',
                 clientVersion: '1.20240101.01.00',
                 hl: 'id',
                 gl: 'ID'
               }
             },
-            query: q,
-            // Filter rahasia YouTube untuk memunculkan HANYA kategori "Lagu Resmi" (Songs)
-            params: "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D" 
+            query: q
           })
         });
 
         const ytData = await ytRes.json();
         
-        // Ekstraksi data hasil pencarian
-        const contents = ytData?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents || [];
+        // Ambil section hasil pencarian
+        const shelfContents = ytData?.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
 
         const tracks = [];
 
-        for (const item of contents) {
-          const video = item.videoRenderer;
-          if (video && video.videoId) {
-            const title = video.title?.runs?.[0]?.text || 'Unknown Title';
-            
-            // Mengambil nama artis dan membersihkan teks "- Topic"
-            let rawArtist = video.ownerText?.runs?.[0]?.text || video.longBylineText?.runs?.[0]?.text || 'Unknown Artist';
-            const cleanArtist = rawArtist.replace(' - Topic', '').trim();
+        for (const section of shelfContents) {
+          const items = section?.musicShelfRenderer?.contents || [];
+          for (const item of items) {
+            const flexColumns = item?.musicResponsiveListItemRenderer?.flexColumns;
+            if (!flexColumns) continue;
 
-            // Memastikan durasi berbentuk detik
-            const durationText = video.lengthText?.simpleText || '0:00';
+            // Judul Lagu
+            const title = flexColumns[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text;
+            
+            // ID Video/Lagu
+            const videoId = item?.musicResponsiveListItemRenderer?.playlistItemData?.videoId || 
+                            flexColumns[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId;
+
+            // Nama Artis / Channel Topic
+            const artistRuns = flexColumns[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
+            let artist = artistRuns.map(r => r.text).join('').replace(' - Topic', '').trim();
+
+            // Durasi jika ada
+            const durationText = artistRuns[artistRuns.length - 1]?.text || '0:00';
             const parts = durationText.split(':').map(Number);
             let durationSeconds = 0;
-            if (parts.length === 2) durationSeconds = parts[0] * 60 + parts[1];
-            if (parts.length === 3) durationSeconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+            if (parts.length === 2 && !isNaN(parts[0])) durationSeconds = parts[0] * 60 + parts[1];
 
-            tracks.push({
-              id: video.videoId,
-              title: title,
-              artist: cleanArtist,
-              // Mengambil thumbnail kualitas tinggi dari album resmi
-              thumbnail: `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
-              duration: durationSeconds,
-              isOfficial: true
-            });
+            if (title && videoId) {
+              tracks.push({
+                id: videoId,
+                title: title,
+                artist: artist || "Official Artist",
+                thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                duration: durationSeconds,
+                isOfficial: true
+              });
+            }
           }
         }
 
-        // Jika filter ketat kosong, coba cari tanpa parameter
+        // Fallback jika YouTube Music tidak memberikan struktur shelf
         if (tracks.length === 0) {
-          return new Response(JSON.stringify({ error: "Lagu resmi tidak ditemukan." }), { status: 404, headers });
+          // Cari ulang via endpoint umum dengan filter Topic
+          const fallbackRes = await fetch('https://www.youtube.com/youtubei/v1/search?prettyPrint=false', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              context: { client: { clientName: 'WEB', clientVersion: '2.20240101.00.00', hl: 'id', gl: 'ID' } },
+              query: `${q} Topic Official Audio`
+            })
+          });
+
+          const fbData = await fallbackRes.json();
+          const contents = fbData?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents || [];
+
+          for (const item of contents) {
+            const video = item.videoRenderer;
+            if (video && video.videoId) {
+              tracks.push({
+                id: video.videoId,
+                title: video.title?.runs?.[0]?.text || 'Unknown',
+                artist: (video.ownerText?.runs?.[0]?.text || '').replace(' - Topic', ''),
+                thumbnail: `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
+                duration: 0,
+                isOfficial: true
+              });
+            }
+          }
+        }
+
+        if (tracks.length === 0) {
+          return new Response(JSON.stringify({ error: "Lagu tidak ditemukan." }), { status: 404, headers });
         }
 
         return new Response(JSON.stringify(tracks), { headers });
       }
 
-      // 2. STREAM AUDIO LINK
+      // 2. FITUR STREAM AUDIO
       if (id) {
         let audioUrl = null;
 
-        // Mencoba Cobalt API dulu
         try {
           const cobaltRes = await fetch("https://api.cobalt.tools/api/json", {
             method: "POST",
-            headers: {
-              "Accept": "application/json",
-              "Content-Type": "application/json"
-            },
+            headers: { "Accept": "application/json", "Content-Type": "application/json" },
             body: JSON.stringify({
               url: `https://www.youtube.com/watch?v=${id}`,
               downloadMode: "audio",
@@ -102,13 +133,10 @@ export default {
 
           if (cobaltRes.ok) {
             const cobaltData = await cobaltRes.json();
-            if (cobaltData.url) {
-              audioUrl = cobaltData.url;
-            }
+            if (cobaltData.url) audioUrl = cobaltData.url;
           }
         } catch (e) {}
 
-        // Fallback jika Cobalt sibuk
         if (!audioUrl) {
           const fallbackInstances = [
             `https://invidious.privacydev.net/api/v1/videos/${id}`,
