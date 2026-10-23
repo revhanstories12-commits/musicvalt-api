@@ -14,126 +14,135 @@ export default {
       return new Response(null, { headers });
     }
 
-    // Daftar instance Invidious & Piped publik yang aktif
-    const SEARCH_INSTANCES = [
-      "https://invidious.privacydev.net",
-      "https://vid.pugil.cc",
-      "https://inv.tux.pizza",
-      "https://pipedapi.kavin.rocks"
-    ];
-
     try {
-      // 1. FITUR PENCARIAN
+      // FITUR 1: PENCARIAN LANGSUNG KE YOUTUBE (INNERTUBE API)
       if (q) {
-        let tracks = [];
-        
-        for (const instance of SEARCH_INSTANCES) {
-          try {
-            if (instance.includes('invidious') || instance.includes('pugil') || instance.includes('tux')) {
-              // API Invidious
-              const res = await fetch(`${instance}/api/v1/search?q=${encodeURIComponent(q + " Official Audio")}&type=video`);
-              if (res.ok) {
-                const data = await res.json();
-                if (Array.isArray(data) && data.length > 0) {
-                  tracks = data.map(item => ({
-                    id: item.videoId,
-                    title: item.title,
-                    artist: item.author ? item.author.replace(' - Topic', '') : 'Unknown Artist',
-                    thumbnail: item.videoThumbnails?.[0]?.url || `https://i.ytimg.com/vi/${item.videoId}/hqdefault.jpg`,
-                    duration: item.lengthSeconds
-                  }));
-                  break; // Sukses, keluar dari loop
-                }
+        const ytRes = await fetch('https://www.youtube.com/youtubei/v1/search?prettyPrint=false', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          },
+          body: JSON.stringify({
+            context: {
+              client: {
+                clientName: 'WEB',
+                clientVersion: '2.20240101.00.00',
+                hl: 'id',
+                gl: 'ID'
               }
-            } else {
-              // API Piped Fallback
-              const res = await fetch(`${instance}/search?q=${encodeURIComponent(q + " Topic Official Audio")}`);
-              if (res.ok) {
-                const data = await res.json();
-                if (data.items) {
-                  tracks = data.items.filter(i => i.type === 'stream').map(item => ({
-                    id: item.url ? item.url.replace('/watch?v=', '') : '',
-                    title: item.title,
-                    artist: item.uploaderName ? item.uploaderName.replace(' - Topic', '') : 'Unknown Artist',
-                    thumbnail: item.thumbnail,
-                    duration: item.duration
-                  }));
-                  break;
-                }
-              }
-            }
-          } catch (e) {
-            continue; // Coba instance berikutnya jika gagal
+            },
+            query: `${q} Official Audio`
+          })
+        });
+
+        const ytData = await ytRes.json();
+        const contents = ytData?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents || [];
+
+        const tracks = [];
+
+        for (const item of contents) {
+          const video = item.videoRenderer;
+          if (video && video.videoId) {
+            const title = video.title?.runs?.[0]?.text || 'Unknown Title';
+            const artist = video.ownerText?.runs?.[0]?.text ? video.ownerText.runs[0].text.replace(' - Topic', '') : 'Unknown Artist';
+            const durationText = video.lengthText?.simpleText || '0:00';
+            
+            // Konversi durasi teks (contoh "3:45") ke detik
+            const parts = durationText.split(':').map(Number);
+            let durationSeconds = 0;
+            if (parts.length === 2) durationSeconds = parts[0] * 60 + parts[1];
+            if (parts.length === 3) durationSeconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+
+            tracks.push({
+              id: video.videoId,
+              title: title,
+              artist: artist,
+              thumbnail: `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
+              duration: durationSeconds
+            });
           }
         }
 
         if (tracks.length === 0) {
-          return new Response(JSON.stringify({ error: "Gagal mengambil lagu, semua server sibuk. Coba beberapa saat lagi." }), { status: 503, headers });
+          return new Response(JSON.stringify({ error: "Lagu tidak ditemukan." }), { status: 404, headers });
         }
 
         return new Response(JSON.stringify(tracks), { headers });
       }
 
-      // 2. FITUR AMBIL AUDIO STREAM
+      // FITUR 2: STREAM AUDIO VIA COBALT / INVIDIOUS FALLBACK
       if (id) {
-        let streamInfo = null;
+        const STREAM_APIS = [
+          `https://api.cobalt.tools/api/json`,
+          `https://invidious.privacydev.net/api/v1/videos/${id}`,
+          `https://vid.pugil.cc/api/v1/videos/${id}`
+        ];
 
-        for (const instance of SEARCH_INSTANCES) {
-          try {
-            if (instance.includes('invidious') || instance.includes('pugil') || instance.includes('tux')) {
-              const res = await fetch(`${instance}/api/v1/videos/${id}`);
+        let audioUrl = null;
+        let title = "";
+        let artist = "";
+
+        // Opsi A: Coba via Cobalt API
+        try {
+          const cobaltRes = await fetch("https://api.cobalt.tools/api/json", {
+            method: "POST",
+            headers: {
+              "Accept": "application/json",
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              url: `https://www.youtube.com/watch?v=${id}`,
+              downloadMode: "audio",
+              audioFormat: "mp3"
+            })
+          });
+
+          if (cobaltRes.ok) {
+            const cobaltData = await cobaltRes.json();
+            if (cobaltData.url) {
+              audioUrl = cobaltData.url;
+            }
+          }
+        } catch (e) {}
+
+        // Opsi B: Fallback ke Invidious jika Cobalt gagal
+        if (!audioUrl) {
+          for (const instance of [STREAM_APIS[1], STREAM_APIS[2]]) {
+            try {
+              const res = await fetch(instance);
               if (res.ok) {
                 const data = await res.json();
                 const adaptive = data.adaptiveFormats || [];
                 const audio = adaptive.filter(f => f.type?.includes('audio')).pop();
-
                 if (audio && audio.url) {
-                  streamInfo = {
-                    id,
-                    title: data.title,
-                    artist: data.author ? data.author.replace(' - Topic', '') : '',
-                    coverUrl: data.videoThumbnails?.[0]?.url || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
-                    duration: data.lengthSeconds,
-                    audioUrl: audio.url
-                  };
+                  audioUrl = audio.url;
+                  title = data.title;
+                  artist = data.author ? data.author.replace(' - Topic', '') : '';
                   break;
                 }
               }
-            } else {
-              const res = await fetch(`${instance}/streams/${id}`);
-              if (res.ok) {
-                const data = await res.json();
-                const audioStreams = data.audioStreams || [];
-                const bestAudio = audioStreams.find(s => s.mimeType?.includes('audio/mp4')) || audioStreams[0];
-                if (bestAudio) {
-                  streamInfo = {
-                    id,
-                    title: data.title,
-                    artist: data.uploader ? data.uploader.replace(' - Topic', '') : '',
-                    coverUrl: data.thumbnailUrl,
-                    duration: data.duration,
-                    audioUrl: bestAudio.url
-                  };
-                  break;
-                }
-              }
-            }
-          } catch (e) {
-            continue;
+            } catch (e) { continue; }
           }
         }
 
-        if (!streamInfo) {
-          return new Response(JSON.stringify({ error: "Gagal memutar audio, coba ID lain." }), { status: 500, headers });
+        if (!audioUrl) {
+          return new Response(JSON.stringify({ error: "Gagal mengambil link audio." }), { status: 500, headers });
         }
 
-        return new Response(JSON.stringify(streamInfo), { headers });
+        return new Response(JSON.stringify({
+          id: id,
+          title: title || "Audio Track",
+          artist: artist || "Artist",
+          coverUrl: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+          audioUrl: audioUrl
+        }), { headers });
       }
 
-      return new Response(JSON.stringify({ error: "Gunakan parameter ?q= atau ?id=" }), { headers });
+      return new Response(JSON.stringify({ error: "Gunakan ?q= untuk mencari atau ?id= untuk memutar lagu." }), { headers });
 
     } catch (err) {
-      return new Response(JSON.stringify({ error: err.message }), { status: 500, headers });
+      return new Response(JSON.stringify({ error: "Internal Error: " + err.message }), { status: 500, headers });
     }
   }
 };
