@@ -97,22 +97,35 @@ export default {
         return new Response(JSON.stringify(tracks), { headers });
       }
 
-      // 2. AMBIL STREAM AUDIO DENGAN MULTI-SERVER FALLBACK (STABIL)
+      // 2. AMBIL STREAM AUDIO DENGAN PILIHAN SERVER CADANGAN LEBIH BANYAK
       if (id) {
         let audioUrl = null;
 
         const STREAM_INSTANCES = [
-          `https://invidious.privacydev.net/api/v1/videos/${id}`,
-          `https://vid.pugil.cc/api/v1/videos/${id}`,
           `https://pipedapi.kavin.rocks/streams/${id}`,
-          `https://pipedapi.leptons.xyz/streams/${id}`
+          `https://pipedapi.privacy.com.de/streams/${id}`,
+          `https://pipedapi.leptons.xyz/streams/${id}`,
+          `https://invidious.privacydev.net/api/v1/videos/${id}`,
+          `https://vid.priv.au/api/v1/videos/${id}`,
+          `https://inv.nadeko.net/api/v1/videos/${id}`
         ];
 
         for (const instance of STREAM_INSTANCES) {
           try {
-            const res = await fetch(instance);
+            const res = await fetch(instance, {
+              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+            });
             if (res.ok) {
               const data = await res.json();
+              
+              // Cek format Piped
+              if (data.audioStreams && data.audioStreams.length > 0) {
+                const bestAudio = data.audioStreams.find(s => s.mimeType && s.mimeType.includes('audio/mp4')) || data.audioStreams[0];
+                if (bestAudio && bestAudio.url) {
+                  audioUrl = bestAudio.url;
+                  break;
+                }
+              }
               
               // Cek format Invidious
               if (data.adaptiveFormats) {
@@ -122,18 +135,9 @@ export default {
                   break;
                 }
               }
-              
-              // Cek format Piped
-              if (data.audioStreams) {
-                const bestAudio = data.audioStreams.find(s => s.mimeType && s.mimeType.includes('audio/mp4')) || data.audioStreams[0];
-                if (bestAudio && bestAudio.url) {
-                  audioUrl = bestAudio.url;
-                  break;
-                }
-              }
             }
           } catch (e) {
-            continue; // Coba server berikutnya jika gagal
+            continue; // Lanjut ke server berikutnya jika gagal
           }
         }
 
