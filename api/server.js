@@ -55,10 +55,8 @@ export default {
 
             const judul = listItem?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text;
             
-            // Mengambil array info (Artis, Album, Durasi)
             const flexRuns = listItem?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
             
-            // Ekstraksi Artis & Album secara terpisah
             let artis = "Official Artist";
             let album = "Single";
 
@@ -66,19 +64,16 @@ export default {
               artis = flexRuns[0]?.text?.replace(' - Topic', '')?.replace('- Topic', '')?.trim() || artis;
             }
 
-            // Jika ada info album di elemen berikutnya (biasanya sebelum elemen durasi/tahun)
             if (flexRuns.length >= 3) {
               album = flexRuns[2]?.text?.trim() || album;
             } else {
-              album = judul; // Fallback jika album tidak tertera
+              album = judul;
             }
 
-            // Mengambil URL Cover Art Asli YouTube Music (Persegi 544x544)
             const rawThumb = listItem?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails;
             let coverArt = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
             
             if (rawThumb && rawThumb.length > 0) {
-              // Ambil URL thumbnail terbaik dan ganti resolusinya menjadi 544x544
               const bestThumb = rawThumb[rawThumb.length - 1].url;
               coverArt = bestThumb.split('=')[0] + '=w544-h544-l90-rj-l90-rj';
             }
@@ -102,29 +97,48 @@ export default {
         return new Response(JSON.stringify(tracks), { headers });
       }
 
-      // 2. AMBIL STREAM AUDIO MP3
+      // 2. AMBIL STREAM AUDIO DENGAN MULTI-SERVER FALLBACK (STABIL)
       if (id) {
         let audioUrl = null;
 
-        try {
-          const cobaltRes = await fetch("https://api.cobalt.tools/api/json", {
-            method: "POST",
-            headers: { "Accept": "application/json", "Content-Type": "application/json" },
-            body: JSON.stringify({
-              url: `https://www.youtube.com/watch?v=${id}`,
-              downloadMode: "audio",
-              audioFormat: "mp3"
-            })
-          });
+        const STREAM_INSTANCES = [
+          `https://invidious.privacydev.net/api/v1/videos/${id}`,
+          `https://vid.pugil.cc/api/v1/videos/${id}`,
+          `https://pipedapi.kavin.rocks/streams/${id}`,
+          `https://pipedapi.leptons.xyz/streams/${id}`
+        ];
 
-          if (cobaltRes.ok) {
-            const cobaltData = await cobaltRes.json();
-            if (cobaltData.url) audioUrl = cobaltData.url;
+        for (const instance of STREAM_INSTANCES) {
+          try {
+            const res = await fetch(instance);
+            if (res.ok) {
+              const data = await res.json();
+              
+              // Cek format Invidious
+              if (data.adaptiveFormats) {
+                const audio = data.adaptiveFormats.filter(f => f.type && f.type.includes('audio')).pop();
+                if (audio && audio.url) {
+                  audioUrl = audio.url;
+                  break;
+                }
+              }
+              
+              // Cek format Piped
+              if (data.audioStreams) {
+                const bestAudio = data.audioStreams.find(s => s.mimeType && s.mimeType.includes('audio/mp4')) || data.audioStreams[0];
+                if (bestAudio && bestAudio.url) {
+                  audioUrl = bestAudio.url;
+                  break;
+                }
+              }
+            }
+          } catch (e) {
+            continue; // Coba server berikutnya jika gagal
           }
-        } catch (e) {}
+        }
 
         if (!audioUrl) {
-          return new Response(JSON.stringify({ error: "Gagal mengambil stream audio." }), { status: 500, headers });
+          return new Response(JSON.stringify({ error: "Gagal mengambil stream audio dari semua server." }), { status: 500, headers });
         }
 
         return new Response(JSON.stringify({
