@@ -15,7 +15,7 @@ export default {
     }
 
     try {
-      // FITUR 1: PENCARIAN KHUSUS YOUTUBE MUSIC (MUSIC ONLY)
+      // 1. PENCARIAN LAGU RESMI YOUTUBE MUSIC
       if (q) {
         const response = await fetch('https://music.youtube.com/youtubei/v1/search?prettyPrint=false', {
           method: 'POST',
@@ -35,13 +35,11 @@ export default {
               }
             },
             query: q,
-            params: "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D" // Parameter wajib untuk menyaring HANYA LAGU RESMI (Songs)
+            params: "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D" // Filter khusus "Songs/Lagu"
           })
         });
 
         const data = await response.json();
-        
-        // Parsing hasil khusus YouTube Music
         const shelf = data?.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
         
         const tracks = [];
@@ -55,32 +53,56 @@ export default {
             const videoId = listItem?.playlistItemData?.videoId || 
                             listItem?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId;
 
-            const title = listItem?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text;
+            const judul = listItem?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text;
             
-            // Mengambil info Artis & Album dari YouTube Music
+            // Mengambil array info (Artis, Album, Durasi)
             const flexRuns = listItem?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
-            const artist = flexRuns.map(r => r.text).join('').replace(' • ', ' - ').replace(' - Topic', '').trim();
+            
+            // Ekstraksi Artis & Album secara terpisah
+            let artis = "Official Artist";
+            let album = "Single";
 
-            if (videoId && title) {
+            if (flexRuns.length > 0) {
+              artis = flexRuns[0]?.text?.replace(' - Topic', '')?.replace('- Topic', '')?.trim() || artis;
+            }
+
+            // Jika ada info album di elemen berikutnya (biasanya sebelum elemen durasi/tahun)
+            if (flexRuns.length >= 3) {
+              album = flexRuns[2]?.text?.trim() || album;
+            } else {
+              album = judul; // Fallback jika album tidak tertera
+            }
+
+            // Mengambil URL Cover Art Asli YouTube Music (Persegi 544x544)
+            const rawThumb = listItem?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails;
+            let coverArt = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+            
+            if (rawThumb && rawThumb.length > 0) {
+              // Ambil URL thumbnail terbaik dan ganti resolusinya menjadi 544x544
+              const bestThumb = rawThumb[rawThumb.length - 1].url;
+              coverArt = bestThumb.split('=')[0] + '=w544-h544-l90-rj-l90-rj';
+            }
+
+            if (videoId && judul) {
               tracks.push({
                 id: videoId,
-                title: title,
-                artist: artist || "Official Artist",
-                thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-                isMusicTrack: true
+                judul: judul,
+                artis: artis,
+                album: album,
+                coverArt: coverArt
               });
             }
           }
         }
 
         if (tracks.length === 0) {
-          return new Response(JSON.stringify({ error: "Lagu resmi tidak ditemukan / API dibatasi oleh YouTube." }), { status: 404, headers });
+          return new Response(JSON.stringify({ error: "Lagu tidak ditemukan." }), { status: 404, headers });
         }
 
         return new Response(JSON.stringify(tracks), { headers });
       }
 
-      // FITUR 2: STREAM AUDIO
+      // 2. AMBIL STREAM AUDIO MP3
       if (id) {
         let audioUrl = null;
 
@@ -107,7 +129,6 @@ export default {
 
         return new Response(JSON.stringify({
           id: id,
-          coverUrl: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
           audioUrl: audioUrl
         }), { headers });
       }
