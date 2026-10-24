@@ -14,28 +14,32 @@ async function handleRequest(request) {
   }
 
   try {
+    // Request KHUSUS ke YouTube Music InnerTube API
     const ytResponse = await fetch("https://music.youtube.com/youtubei/v1/search?alt=json", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Origin": "https://music.youtube.com",
+        "Referer": "https://music.youtube.com/"
       },
       body: JSON.stringify({
         context: {
           client: {
-            clientName: "WEB_REMIX",
+            clientName: "WEB_REMIX", // Web App resmi YouTube Music
             clientVersion: "1.20231214.00.00",
             hl: "id",
             gl: "ID"
           }
         },
         query: query,
+        // Param ini memfilter hasil pencarian KHUSUS tab "Songs" / Lagu Resmi di YouTube Music
         params: "egWKAQwIARABGAEgACgAMABqC1RvcGljIFRyYWNr"
       })
     })
 
     if (!ytResponse.ok) {
-      throw new Error("Gagal terhubung ke YouTube Music")
+      throw new Error("Gagal terhubung ke YouTube Music API")
     }
 
     const data = await ytResponse.json()
@@ -54,30 +58,30 @@ async function handleRequest(request) {
         const id = endpoint?.videoId
         const musicVideoType = endpoint?.musicVideoType
 
-        if (id && musicVideoType !== "MUSIC_VIDEO_TYPE_OMV") {
+        // FILTER KETAT: Abaikan video musik biasa (OMV) dan video YouTube standar
+        if (id && musicVideoType !== "MUSIC_VIDEO_TYPE_OMV" && musicVideoType !== "MUSIC_VIDEO_TYPE_UGC") {
+          // 1. Ambil Judul Lagu
           const judul = item.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || "Unknown Title"
           
+          // 2. Ambil Nama Artis
           const flex2Runs = item.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []
           const artis = flex2Runs.length > 0 ? flex2Runs[0].text : "Unknown Artist"
           
+          // 3. Ambil Nama Album
           let album = judul
           if (flex2Runs.length >= 3) {
             album = flex2Runs[flex2Runs.length - 1].text || judul
           }
 
-          // 1. Ambil URL Thumbnail
+          // 4. Ambil dan Format Cover Art khusus YouTube Music (w544-h544)
           const thumbnails = item.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || []
           let rawCover = thumbnails.length > 0 ? thumbnails[thumbnails.length - 1].url : ""
 
-          // 2. Format URL Cover Art agar berukuran 544x544 resolusi tinggi
           let coverArt = rawCover
           if (rawCover.includes("googleusercontent.com")) {
-            // Ubah / potong parameter ukuran lama dan ganti dengan w544-h544-l90-rj-l90-rj
+            // Paksa ukuran menjadi w544-h544-l90-rj-l90-rj
             const baseUrl = rawCover.split("=")[0]
             coverArt = `${baseUrl}=w544-h544-l90-rj-l90-rj`
-          } else if (rawCover.includes("ytimg.com")) {
-            // Jika thumbnail bawaan dari i.ytimg.com, ubah ke versi hqdefault / maxresdefault
-            coverArt = rawCover.replace(/hqdefault|mqdefault|default/, "maxresdefault")
           }
 
           if (!formattedResults.some(r => r.id === id)) {
