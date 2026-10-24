@@ -1,160 +1,65 @@
-export default {
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-    const q = url.searchParams.get('q');
-    const id = url.searchParams.get('id');
+addEventListener('fetch', event => {
+  event.respondWith(handleRequest(event.request))
+})
 
-    const headers = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
-      'Content-Type': 'application/json'
-    };
+async function handleRequest(request) {
+  const url = new URL(request.url)
+  const query = url.searchParams.get('q')
 
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { headers });
-    }
+  if (!query) {
+    return new Response(JSON.stringify({ error: "Parameter 'q' wajib diisi!" }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+    })
+  }
 
+  // Daftar instance Piped publik cadangan
+  const instances = [
+    "https://pipedapi.kavin.rocks",
+    "https://pipedapi.privacy.com.de",
+    "https://pipedapi.leptons.xyz"
+  ]
+
+  let searchResults = null
+
+  for (const instance of instances) {
     try {
-      // 1. PENCARIAN LAGU RESMI YOUTUBE MUSIC
-      if (q) {
-        const response = await fetch('https://music.youtube.com/youtubei/v1/search?prettyPrint=false', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'X-YouTube-Client-Name': '67',
-            'X-YouTube-Client-Version': '1.20240101.01.00'
-          },
-          body: JSON.stringify({
-            context: {
-              client: {
-                clientName: 'WEB_REMIX',
-                clientVersion: '1.20240101.01.00',
-                hl: 'id',
-                gl: 'ID'
-              }
-            },
-            query: q,
-            params: "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D" // Filter khusus "Songs/Lagu"
-          })
-        });
-
-        const data = await response.json();
-        const shelf = data?.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
-        
-        const tracks = [];
-
-        for (const section of shelf) {
-          const contents = section?.musicShelfRenderer?.contents || [];
-          for (const item of contents) {
-            const listItem = item?.musicResponsiveListItemRenderer;
-            if (!listItem) continue;
-
-            const videoId = listItem?.playlistItemData?.videoId || 
-                            listItem?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId;
-
-            const judul = listItem?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text;
-            
-            const flexRuns = listItem?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
-            
-            let artis = "Official Artist";
-            let album = "Single";
-
-            if (flexRuns.length > 0) {
-              artis = flexRuns[0]?.text?.replace(' - Topic', '')?.replace('- Topic', '')?.trim() || artis;
-            }
-
-            if (flexRuns.length >= 3) {
-              album = flexRuns[2]?.text?.trim() || album;
-            } else {
-              album = judul;
-            }
-
-            const rawThumb = listItem?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails;
-            let coverArt = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
-            
-            if (rawThumb && rawThumb.length > 0) {
-              const bestThumb = rawThumb[rawThumb.length - 1].url;
-              coverArt = bestThumb.split('=')[0] + '=w544-h544-l90-rj-l90-rj';
-            }
-
-            if (videoId && judul) {
-              tracks.push({
-                id: videoId,
-                judul: judul,
-                artis: artis,
-                album: album,
-                coverArt: coverArt
-              });
-            }
-          }
-        }
-
-        if (tracks.length === 0) {
-          return new Response(JSON.stringify({ error: "Lagu tidak ditemukan." }), { status: 404, headers });
-        }
-
-        return new Response(JSON.stringify(tracks), { headers });
+      const response = await fetch(`${instance}/search?q=${encodeURIComponent(query)}&filter=all`)
+      if (response.ok) {
+        const json = await response.json()
+        searchResults = json.items || []
+        break
       }
-
-      // 2. AMBIL STREAM AUDIO DENGAN PILIHAN SERVER CADANGAN LEBIH BANYAK
-      if (id) {
-        let audioUrl = null;
-
-        const STREAM_INSTANCES = [
-          `https://pipedapi.kavin.rocks/streams/${id}`,
-          `https://pipedapi.privacy.com.de/streams/${id}`,
-          `https://pipedapi.leptons.xyz/streams/${id}`,
-          `https://invidious.privacydev.net/api/v1/videos/${id}`,
-          `https://vid.priv.au/api/v1/videos/${id}`,
-          `https://inv.nadeko.net/api/v1/videos/${id}`
-        ];
-
-        for (const instance of STREAM_INSTANCES) {
-          try {
-            const res = await fetch(instance, {
-              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-            });
-            if (res.ok) {
-              const data = await res.json();
-              
-              // Cek format Piped
-              if (data.audioStreams && data.audioStreams.length > 0) {
-                const bestAudio = data.audioStreams.find(s => s.mimeType && s.mimeType.includes('audio/mp4')) || data.audioStreams[0];
-                if (bestAudio && bestAudio.url) {
-                  audioUrl = bestAudio.url;
-                  break;
-                }
-              }
-              
-              // Cek format Invidious
-              if (data.adaptiveFormats) {
-                const audio = data.adaptiveFormats.filter(f => f.type && f.type.includes('audio')).pop();
-                if (audio && audio.url) {
-                  audioUrl = audio.url;
-                  break;
-                }
-              }
-            }
-          } catch (e) {
-            continue; // Lanjut ke server berikutnya jika gagal
-          }
-        }
-
-        if (!audioUrl) {
-          return new Response(JSON.stringify({ error: "Gagal mengambil stream audio dari semua server." }), { status: 500, headers });
-        }
-
-        return new Response(JSON.stringify({
-          id: id,
-          audioUrl: audioUrl
-        }), { headers });
-      }
-
-      return new Response(JSON.stringify({ error: "Gunakan ?q= untuk mencari lagu atau ?id= untuk memutar." }), { headers });
-
-    } catch (err) {
-      return new Response(JSON.stringify({ error: err.message }), { status: 500, headers });
+    } catch (e) {
+      continue 
     }
   }
-};
+
+  if (!searchResults) {
+    return new Response(JSON.stringify({ error: "Gagal mengambil data dari server." }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+    })
+  }
+
+  // Format data agar mencakup artist, subscriber, durasi, dan playlist
+  const formattedData = searchResults.map(item => {
+    return {
+      title: item.title || "Unknown Title",
+      videoId: item.url && item.url.includes("/watch?v=") ? item.url.split("/watch?v=")[1] : item.url,
+      artist: item.uploaderName || "Unknown Artist",
+      subscribers: item.uploaderSubscriberCount || 0,
+      thumbnail: item.thumbnail || "",
+      duration: item.duration || 0,
+      type: item.type || "video", // Bisa berupa video, channel, atau playlist
+      playlistName: item.type === "playlist" ? item.title : null
+    }
+  })
+
+  return new Response(JSON.stringify({ results: formattedData }), {
+    headers: { 
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*' 
+    }
+  })
+}
