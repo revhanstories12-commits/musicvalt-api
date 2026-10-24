@@ -30,6 +30,7 @@ async function handleRequest(request) {
           }
         },
         query: query,
+        // Filter khusus tab "Songs"
         params: "egWKAQwIARABGAEgACgAMABqC1RvcGljIFRyYWNr"
       })
     })
@@ -52,10 +53,10 @@ async function handleRequest(request) {
                          item.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint
 
         const id = endpoint?.videoId
-        const musicVideoType = endpoint?.musicVideoType // ATV = Audio Track, OMV = Music Video
+        const musicVideoType = endpoint?.musicVideoType
 
-        // FILTER KETAT: Hanya ambil jika tipenya adalah Audio Track (Topic Track / Lagu Resmi)
-        if (id && musicVideoType === "MUSIC_VIDEO_TYPE_ATV") {
+        // Filter: Abaikan jika terdeteksi eksplisit sebagai Official Music Video (OMV)
+        if (id && musicVideoType !== "MUSIC_VIDEO_TYPE_OMV") {
           const judul = item.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || "Unknown Title"
           
           const flex2Runs = item.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []
@@ -63,7 +64,7 @@ async function handleRequest(request) {
           
           let album = judul
           if (flex2Runs.length >= 3) {
-            album = flex2Runs.some(r => r.text.length > 0) ? flex2Runs[flex2Runs.length - 1].text : judul
+            album = flex2Runs[flex2Runs.length - 1].text || judul
           }
 
           const thumbnails = item.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || []
