@@ -14,7 +14,6 @@ async function handleRequest(request) {
   }
 
   try {
-    // Request langsung ke YouTube Music InnerTube API (Tanpa API Key, tanpa instance pihak ketiga)
     const ytResponse = await fetch("https://music.youtube.com/youtubei/v1/search?alt=json", {
       method: "POST",
       headers: {
@@ -39,38 +38,52 @@ async function handleRequest(request) {
     }
 
     const data = await ytResponse.json()
-    
-    // Parsing data dari struktur YouTube Music InnerTube
-    const contents = data.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || []
-    
-    let formattedResults = []
+    const formattedResults = []
 
-    for (const section of contents) {
-      const items = section.musicShelfRenderer?.contents || []
-      for (const item of items) {
-        const itemData = item.musicResponsiveListItemRenderer
-        if (!itemData) continue
+    // Pencarian rekursif untuk menemukan semua objek musicResponsiveListItemRenderer (item lagu)
+    function searchItems(obj) {
+      if (!obj || typeof obj !== 'object') return
 
-        const videoId = itemData.playlistItemData?.videoId || itemData.doubleTapCommand?.watchEndpoint?.videoId
-        if (!videoId) continue
-
-        const title = itemData.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || "Unknown Title"
-        const artist = itemData.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || "Unknown Artist"
+      if (obj.musicResponsiveListItemRenderer) {
+        const item = obj.musicResponsiveListItemRenderer
         
-        // Ambil Thumbnail ukuran tertinggi
-        const thumbnails = itemData.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || []
-        const thumbnail = thumbnails.length > 0 ? thumbnails[thumbnails.length - 1].url : ""
+        // Ambil Video ID
+        const videoId = item.playlistItemData?.videoId || 
+                        item.doubleTapCommand?.watchEndpoint?.videoId ||
+                        item.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId
 
-        formattedResults.push({
-          title: title,
-          videoId: videoId,
-          artist: artist,
-          subscribers: "Official Track", // YouTube Music Topic Track
-          thumbnail: thumbnail,
-          type: "video"
-        })
+        if (videoId) {
+          // Ambil Judul Lagu
+          const title = item.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || "Unknown Title"
+          
+          // Ambil Nama Artist / Channel
+          const flex2Runs = item.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []
+          const artist = flex2Runs.length > 0 ? flex2Runs[0].text : "Unknown Artist"
+
+          // Ambil Thumbnail
+          const thumbnails = item.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || []
+          const thumbnail = thumbnails.length > 0 ? thumbnails[thumbnails.length - 1].url : ""
+
+          // Cegah duplikasi ID dalam hasil
+          if (!formattedResults.some(r => r.videoId === videoId)) {
+            formattedResults.push({
+              title: title,
+              videoId: videoId,
+              artist: artist,
+              subscribers: "Official Track",
+              thumbnail: thumbnail,
+              type: "video"
+            })
+          }
+        }
+      }
+
+      for (const key of Object.keys(obj)) {
+        searchItems(obj[key])
       }
     }
+
+    searchItems(data)
 
     return new Response(JSON.stringify({ results: formattedResults }), {
       headers: {
