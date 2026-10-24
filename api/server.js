@@ -14,7 +14,6 @@ async function handleRequest(request) {
   }
 
   try {
-    // Request KHUSUS ke YouTube Music InnerTube API
     const ytResponse = await fetch("https://music.youtube.com/youtubei/v1/search?alt=json", {
       method: "POST",
       headers: {
@@ -26,14 +25,13 @@ async function handleRequest(request) {
       body: JSON.stringify({
         context: {
           client: {
-            clientName: "WEB_REMIX", // Web App resmi YouTube Music
+            clientName: "WEB_REMIX",
             clientVersion: "1.20231214.00.00",
             hl: "id",
             gl: "ID"
           }
         },
         query: query,
-        // Param ini memfilter hasil pencarian KHUSUS tab "Songs" / Lagu Resmi di YouTube Music
         params: "egWKAQwIARABGAEgACgAMABqC1RvcGljIFRyYWNr"
       })
     })
@@ -58,28 +56,31 @@ async function handleRequest(request) {
         const id = endpoint?.videoId
         const musicVideoType = endpoint?.musicVideoType
 
-        // FILTER KETAT: Abaikan video musik biasa (OMV) dan video YouTube standar
-        if (id && musicVideoType !== "MUSIC_VIDEO_TYPE_OMV" && musicVideoType !== "MUSIC_VIDEO_TYPE_UGC") {
-          // 1. Ambil Judul Lagu
-          const judul = item.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || "Unknown Title"
+        const judul = item.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || "Unknown Title"
+        const flex2Runs = item.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []
+        const artis = flex2Runs.length > 0 ? flex2Runs[0].text : "Unknown Artist"
+
+        // --- FILTER TAMBAHAN UNTUK MEMBUANG LIVE / COVER / DOKUMENTASI ---
+        const lowerJudul = judul.toLowerCase()
+        const isLiveOrCover = lowerJudul.includes("live") || 
+                              lowerJudul.includes("cover") || 
+                              lowerJudul.includes("dokumentasi") || 
+                              lowerJudul.includes("karaoke") ||
+                              lowerJudul.includes("akustik live")
+
+        // Pastikan bukan video live/cover dan bukan video tipe OMV/UGC mentah
+        if (id && !isLiveOrCover && musicVideoType !== "MUSIC_VIDEO_TYPE_OMV" && musicVideoType !== "MUSIC_VIDEO_TYPE_UGC") {
           
-          // 2. Ambil Nama Artis
-          const flex2Runs = item.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []
-          const artis = flex2Runs.length > 0 ? flex2Runs[0].text : "Unknown Artist"
-          
-          // 3. Ambil Nama Album
           let album = judul
           if (flex2Runs.length >= 3) {
             album = flex2Runs[flex2Runs.length - 1].text || judul
           }
 
-          // 4. Ambil dan Format Cover Art khusus YouTube Music (w544-h544)
           const thumbnails = item.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || []
           let rawCover = thumbnails.length > 0 ? thumbnails[thumbnails.length - 1].url : ""
 
           let coverArt = rawCover
           if (rawCover.includes("googleusercontent.com")) {
-            // Paksa ukuran menjadi w544-h544-l90-rj-l90-rj
             const baseUrl = rawCover.split("=")[0]
             coverArt = `${baseUrl}=w544-h544-l90-rj-l90-rj`
           }
