@@ -30,7 +30,6 @@ async function handleRequest(request) {
           }
         },
         query: query,
-        // Filter khusus tab "Songs"
         params: "egWKAQwIARABGAEgACgAMABqC1RvcGljIFRyYWNr"
       })
     })
@@ -55,7 +54,6 @@ async function handleRequest(request) {
         const id = endpoint?.videoId
         const musicVideoType = endpoint?.musicVideoType
 
-        // Filter: Abaikan jika terdeteksi eksplisit sebagai Official Music Video (OMV)
         if (id && musicVideoType !== "MUSIC_VIDEO_TYPE_OMV") {
           const judul = item.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || "Unknown Title"
           
@@ -67,8 +65,20 @@ async function handleRequest(request) {
             album = flex2Runs[flex2Runs.length - 1].text || judul
           }
 
+          // 1. Ambil URL Thumbnail
           const thumbnails = item.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || []
-          const coverArt = thumbnails.length > 0 ? thumbnails[thumbnails.length - 1].url : ""
+          let rawCover = thumbnails.length > 0 ? thumbnails[thumbnails.length - 1].url : ""
+
+          // 2. Format URL Cover Art agar berukuran 544x544 resolusi tinggi
+          let coverArt = rawCover
+          if (rawCover.includes("googleusercontent.com")) {
+            // Ubah / potong parameter ukuran lama dan ganti dengan w544-h544-l90-rj-l90-rj
+            const baseUrl = rawCover.split("=")[0]
+            coverArt = `${baseUrl}=w544-h544-l90-rj-l90-rj`
+          } else if (rawCover.includes("ytimg.com")) {
+            // Jika thumbnail bawaan dari i.ytimg.com, ubah ke versi hqdefault / maxresdefault
+            coverArt = rawCover.replace(/hqdefault|mqdefault|default/, "maxresdefault")
+          }
 
           if (!formattedResults.some(r => r.id === id)) {
             formattedResults.push({
