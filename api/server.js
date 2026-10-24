@@ -14,7 +14,7 @@ async function handleRequest(request) {
   }
 
   try {
-    // Request ke YouTube Music InnerTube API dengan FILTER KHUSUS SONGS / OFFICIAL TRACKS
+    // Request ke YouTube Music InnerTube API (Filter khusus Lagu / Songs)
     const ytResponse = await fetch("https://music.youtube.com/youtubei/v1/search?alt=json", {
       method: "POST",
       headers: {
@@ -26,12 +26,11 @@ async function handleRequest(request) {
           client: {
             clientName: "WEB_REMIX",
             clientVersion: "1.20231214.00.00",
-            hl: "en",
-            gl: "US"
+            hl: "id",
+            gl: "ID"
           }
         },
         query: query,
-        // Param ini memfilter hasil pencarian KHUSUS kategori "Songs" (Official Release / Topic Tracks)
         params: "egWKAQwIARABGAEgACgAMABqC1RvcGljIFRyYWNr"
       })
     })
@@ -49,31 +48,36 @@ async function handleRequest(request) {
       if (obj.musicResponsiveListItemRenderer) {
         const item = obj.musicResponsiveListItemRenderer
         
-        // Ambil Video ID
-        const videoId = item.playlistItemData?.videoId || 
-                        item.doubleTapCommand?.watchEndpoint?.videoId ||
-                        item.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId
+        // Extract Video ID / Track ID
+        const id = item.playlistItemData?.videoId || 
+                   item.doubleTapCommand?.watchEndpoint?.videoId ||
+                   item.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId
 
-        if (videoId) {
-          // Judul Lagu Official
-          const title = item.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || "Unknown Title"
+        if (id) {
+          // Extract Judul Lagu
+          const judul = item.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || "Unknown Title"
           
-          // Nama Artist / Topic Channel
+          // Extract Artis & Album dari flexColumn ke-2
           const flex2Runs = item.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []
-          const artist = flex2Runs.length > 0 ? flex2Runs[0].text : "Official Artist"
+          const artis = flex2Runs.length > 0 ? flex2Runs[0].text : "Unknown Artist"
+          
+          // Ambil nama album jika tersedia di runs, jika tidak sama dengan judul/artis
+          let album = judul
+          if (flex2Runs.length >= 3) {
+            album = flex2Runs[2].text
+          }
 
-          // Thumbnail Cover Art Album Kualitas Tinggi
+          // Extract Cover Art Thumbnail Kualitas Tinggi
           const thumbnails = item.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || []
-          const thumbnail = thumbnails.length > 0 ? thumbnails[thumbnails.length - 1].url : ""
+          const coverArt = thumbnails.length > 0 ? thumbnails[thumbnails.length - 1].url : ""
 
-          if (!formattedResults.some(r => r.videoId === videoId)) {
+          if (!formattedResults.some(r => r.id === id)) {
             formattedResults.push({
-              title: title,
-              videoId: videoId,
-              artist: artist,
-              subscribers: "Official Topic Track",
-              thumbnail: thumbnail,
-              type: "song"
+              id: id,
+              judul: judul,
+              artis: artis,
+              album: album,
+              coverArt: coverArt
             })
           }
         }
@@ -86,7 +90,8 @@ async function handleRequest(request) {
 
     searchItems(data)
 
-    return new Response(JSON.stringify({ results: formattedResults }), {
+    // Langsung mengembalikan array daftar lagunya
+    return new Response(JSON.stringify(formattedResults, null, 2), {
       headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*'
