@@ -14,6 +14,7 @@ async function handleRequest(request) {
   }
 
   try {
+    // Request ke YouTube Music InnerTube API dengan FILTER KHUSUS SONGS / OFFICIAL TRACKS
     const ytResponse = await fetch("https://music.youtube.com/youtubei/v1/search?alt=json", {
       method: "POST",
       headers: {
@@ -29,7 +30,9 @@ async function handleRequest(request) {
             gl: "US"
           }
         },
-        query: query
+        query: query,
+        // Param ini memfilter hasil pencarian KHUSUS kategori "Songs" (Official Release / Topic Tracks)
+        params: "egWKAQwIARABGAEgACgAMABqC1RvcGljIFRyYWNr"
       })
     })
 
@@ -40,7 +43,6 @@ async function handleRequest(request) {
     const data = await ytResponse.json()
     const formattedResults = []
 
-    // Pencarian rekursif untuk menemukan semua objek musicResponsiveListItemRenderer (item lagu)
     function searchItems(obj) {
       if (!obj || typeof obj !== 'object') return
 
@@ -53,26 +55,25 @@ async function handleRequest(request) {
                         item.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId
 
         if (videoId) {
-          // Ambil Judul Lagu
+          // Judul Lagu Official
           const title = item.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || "Unknown Title"
           
-          // Ambil Nama Artist / Channel
+          // Nama Artist / Topic Channel
           const flex2Runs = item.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []
-          const artist = flex2Runs.length > 0 ? flex2Runs[0].text : "Unknown Artist"
+          const artist = flex2Runs.length > 0 ? flex2Runs[0].text : "Official Artist"
 
-          // Ambil Thumbnail
+          // Thumbnail Cover Art Album Kualitas Tinggi
           const thumbnails = item.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || []
           const thumbnail = thumbnails.length > 0 ? thumbnails[thumbnails.length - 1].url : ""
 
-          // Cegah duplikasi ID dalam hasil
           if (!formattedResults.some(r => r.videoId === videoId)) {
             formattedResults.push({
               title: title,
               videoId: videoId,
               artist: artist,
-              subscribers: "Official Track",
+              subscribers: "Official Topic Track",
               thumbnail: thumbnail,
-              type: "video"
+              type: "song"
             })
           }
         }
