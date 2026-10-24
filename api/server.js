@@ -14,7 +14,6 @@ async function handleRequest(request) {
   }
 
   try {
-    // Request ke YouTube Music InnerTube API (Filter khusus Lagu / Songs)
     const ytResponse = await fetch("https://music.youtube.com/youtubei/v1/search?alt=json", {
       method: "POST",
       headers: {
@@ -48,26 +47,25 @@ async function handleRequest(request) {
       if (obj.musicResponsiveListItemRenderer) {
         const item = obj.musicResponsiveListItemRenderer
         
-        // Extract Video ID / Track ID
-        const id = item.playlistItemData?.videoId || 
-                   item.doubleTapCommand?.watchEndpoint?.videoId ||
-                   item.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId
+        const endpoint = item.playlistItemData || 
+                         item.doubleTapCommand?.watchEndpoint ||
+                         item.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint
 
-        if (id) {
-          // Extract Judul Lagu
+        const id = endpoint?.videoId
+        const musicVideoType = endpoint?.musicVideoType // ATV = Audio Track, OMV = Music Video
+
+        // FILTER KETAT: Hanya ambil jika tipenya adalah Audio Track (Topic Track / Lagu Resmi)
+        if (id && musicVideoType === "MUSIC_VIDEO_TYPE_ATV") {
           const judul = item.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || "Unknown Title"
           
-          // Extract Artis & Album dari flexColumn ke-2
           const flex2Runs = item.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []
           const artis = flex2Runs.length > 0 ? flex2Runs[0].text : "Unknown Artist"
           
-          // Ambil nama album jika tersedia di runs, jika tidak sama dengan judul/artis
           let album = judul
           if (flex2Runs.length >= 3) {
-            album = flex2Runs[2].text
+            album = flex2Runs.some(r => r.text.length > 0) ? flex2Runs[flex2Runs.length - 1].text : judul
           }
 
-          // Extract Cover Art Thumbnail Kualitas Tinggi
           const thumbnails = item.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || []
           const coverArt = thumbnails.length > 0 ? thumbnails[thumbnails.length - 1].url : ""
 
@@ -90,7 +88,6 @@ async function handleRequest(request) {
 
     searchItems(data)
 
-    // Langsung mengembalikan array daftar lagunya
     return new Response(JSON.stringify(formattedResults, null, 2), {
       headers: {
         'Content-Type': 'application/json',
