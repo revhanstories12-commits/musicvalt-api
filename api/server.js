@@ -32,6 +32,7 @@ async function handleRequest(request) {
           }
         },
         query: query,
+        // Filter khusus kategori Lagu (Songs) resmi dari YouTube Music
         params: "egWKAQwIARABGAEgACgAMABqC1RvcGljIFRyYWNr"
       })
     })
@@ -54,28 +55,20 @@ async function handleRequest(request) {
                          item.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint
 
         const id = endpoint?.videoId
-        const musicVideoType = endpoint?.musicVideoType
 
-        const judul = item.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || "Unknown Title"
-        const flex2Runs = item.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []
-        const artis = flex2Runs.length > 0 ? flex2Runs[0].text : "Unknown Artist"
-
-        // --- FILTER TAMBAHAN UNTUK MEMBUANG LIVE / COVER / DOKUMENTASI ---
-        const lowerJudul = judul.toLowerCase()
-        const isLiveOrCover = lowerJudul.includes("live") || 
-                              lowerJudul.includes("cover") || 
-                              lowerJudul.includes("dokumentasi") || 
-                              lowerJudul.includes("karaoke") ||
-                              lowerJudul.includes("akustik live")
-
-        // Pastikan bukan video live/cover dan bukan video tipe OMV/UGC mentah
-        if (id && !isLiveOrCover && musicVideoType !== "MUSIC_VIDEO_TYPE_OMV" && musicVideoType !== "MUSIC_VIDEO_TYPE_UGC") {
+        // Ambil semua hasil dari kategori Songs YouTube Music secara normal
+        if (id) {
+          const judul = item.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || "Unknown Title"
+          
+          const flex2Runs = item.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []
+          const artis = flex2Runs.length > 0 ? flex2Runs[0].text : "Unknown Artist"
           
           let album = judul
           if (flex2Runs.length >= 3) {
             album = flex2Runs[flex2Runs.length - 1].text || judul
           }
 
+          // Ambil Cover Art & Paksa resolusi tinggi w544-h544
           const thumbnails = item.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || []
           let rawCover = thumbnails.length > 0 ? thumbnails[thumbnails.length - 1].url : ""
 
