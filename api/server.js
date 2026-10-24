@@ -13,21 +13,23 @@ async function handleRequest(request) {
     })
   }
 
-  // Daftar instance Piped publik cadangan
+  // Daftar instance Invidious publik sebagai pengganti Piped
   const instances = [
-    "https://pipedapi.kavin.rocks",
-    "https://pipedapi.privacy.com.de",
-    "https://pipedapi.leptons.xyz"
+    "https://invidious.privacydev.net",
+    "https://vid.puffyan.us",
+    "https://inv.nadeko.net"
   ]
 
   let searchResults = null
 
   for (const instance of instances) {
     try {
-      const response = await fetch(`${instance}/search?q=${encodeURIComponent(query)}&filter=all`)
+      const response = await fetch(`${instance}/api/v1/search?q=${encodeURIComponent(query)}&type=video`, {
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+      })
       if (response.ok) {
         const json = await response.json()
-        searchResults = json.items || []
+        searchResults = json || []
         break
       }
     } catch (e) {
@@ -35,24 +37,23 @@ async function handleRequest(request) {
     }
   }
 
-  if (!searchResults) {
-    return new Response(JSON.stringify({ error: "Gagal mengambil data dari server." }), {
+  if (!searchResults || searchResults.length === 0) {
+    return new Response(JSON.stringify({ error: "Gagal mengambil data dari server Invidious." }), {
       status: 500,
       headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     })
   }
 
-  // Format data agar mencakup artist, subscriber, durasi, dan playlist
+  // Format data agar mencakup artist, thumbnail, durasi, dll
   const formattedData = searchResults.map(item => {
     return {
       title: item.title || "Unknown Title",
-      videoId: item.url && item.url.includes("/watch?v=") ? item.url.split("/watch?v=")[1] : item.url,
-      artist: item.uploaderName || "Unknown Artist",
-      subscribers: item.uploaderSubscriberCount || 0,
-      thumbnail: item.thumbnail || "",
-      duration: item.duration || 0,
-      type: item.type || "video", // Bisa berupa video, channel, atau playlist
-      playlistName: item.type === "playlist" ? item.title : null
+      videoId: item.videoId || "",
+      artist: item.author || "Unknown Artist",
+      subscribers: item.subCountText || "0",
+      thumbnail: item.videoThumbnails?.[0]?.url || "",
+      duration: item.lengthSeconds || 0,
+      type: "video"
     }
   })
 
