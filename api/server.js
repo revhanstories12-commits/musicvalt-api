@@ -4,7 +4,13 @@ addEventListener('fetch', event => {
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 const CORS = { 'Access-Control-Allow-Origin': '*' }
-const RELEASE_TYPES = ['Song', 'Single', 'EP', 'Album']
+const CLIENT = { clientName: "WEB_REMIX", clientVersion: "1.20231214.00.00", hl: "id", gl: "ID" }
+const HEADERS = {
+  "Content-Type": "application/json",
+  "User-Agent": UA,
+  "Origin": "https://music.youtube.com",
+  "Referer": "https://music.youtube.com/"
+}
 
 async function handleRequest(request) {
   const url = new URL(request.url)
@@ -20,16 +26,9 @@ async function handleRequest(request) {
   try {
     const ytResponse = await fetch("https://music.youtube.com/youtubei/v1/search?alt=json", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": UA,
-        "Origin": "https://music.youtube.com",
-        "Referer": "https://music.youtube.com/"
-      },
+      headers: HEADERS,
       body: JSON.stringify({
-        context: {
-          client: { clientName: "WEB_REMIX", clientVersion: "1.20231214.00.00", hl: "id", gl: "ID" }
-        },
+        context: { client: CLIENT },
         query: query,
         params: "EgWKAQIIAWoKEAkQBRAKEAMQBA==" // filter resmi "Songs"
       })
@@ -38,44 +37,32 @@ async function handleRequest(request) {
     if (!ytResponse.ok) throw new Error("Gagal terhubung ke YouTube Music API")
 
     const data = await ytResponse.json()
-    const formattedResults = []
+    const candidates = []
 
     function searchItems(obj) {
       if (!obj || typeof obj !== 'object') return
 
       if (obj.musicResponsiveListItemRenderer) {
         const item = obj.musicResponsiveListItemRenderer
-
         const endpoint = item.playlistItemData ||
                          item.doubleTapCommand?.watchEndpoint ||
                          item.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint
         const id = endpoint?.videoId
 
-        // Subtitle kolom kedua memuat tipe rilis, misalnya "Song • Artis • 3:45"
-        const flex2Runs = item.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []
-        const subtitleText = flex2Runs.map(r => r.text).join('')
-        const isRelease = RELEASE_TYPES.some(t => subtitleText.includes(t))
+        const runs2 = item.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []
+        const artistRun = runs2.find(r => r.navigationEndpoint?.browseEndpoint?.browseId?.startsWith('UC'))
+        const albumRun = runs2.find(r => r.navigationEndpoint?.browseEndpoint?.browseId?.startsWith('MPRE'))
+        const artis = artistRun?.text || runs2[0]?.text || "Unknown Artist"
+        const album = albumRun?.text || ""
 
-        // Artis resmi wajib punya link channel UC...
-        const hasArtistChannel = flex2Runs.some(r =>
-          r.navigationEndpoint?.browseEndpoint?.browseId?.startsWith('UC')
-        )
-
-        if (id && isRelease && hasArtistChannel && !formattedResults.some(r => r.id === id)) {
+        if (id && !candidates.some(c => c.id === id)) {
           const judul = item.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || "Unknown Title"
-          const artis = flex2Runs.find(r => r.navigationEndpoint?.browseEndpoint?.browseId?.startsWith('UC'))?.text || "Unknown Artist"
-
-          let album = judul
-          const albumRun = flex2Runs.find(r => r.navigationEndpoint?.browseEndpoint?.browseId?.startsWith('MPRE'))
-          if (albumRun) album = albumRun.text
-
           const thumbnails = item.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || []
           let coverArt = thumbnails.length > 0 ? thumbnails[thumbnails.length - 1].url : ""
           if (coverArt.includes("googleusercontent.com")) {
             coverArt = `${coverArt.split("=")[0]}=w544-h544-l90-rj-l90-rj`
           }
-
-          formattedResults.push({ id, judul, artis, album, coverArt })
+          candidates.push({ id, judul, artis, album: album || artis, coverArt })
         }
       }
 
@@ -83,6 +70,10 @@ async function handleRequest(request) {
     }
 
     searchItems(data)
+
+    // Buang hanya jika channel jelas bukan "... - Topic". Jika gagal dicek, hasil tetap dipertahankan.
+    const verdicts = await Promise.all(candidates.map(c => checkTopic(c.id)))
+    const formattedResults = candidates.filter((_, i) => verdicts[i] !== false)
 
     return new Response(JSON.stringify(formattedResults, null, 2), {
       headers: { 'Content-Type': 'application/json', ...CORS }
@@ -93,5 +84,23 @@ async function handleRequest(request) {
       status: 500,
       headers: { 'Content-Type': 'application/json', ...CORS }
     })
+  }
+}
+
+// Mengembalikan true (Topic), false (bukan Topic), atau null (tidak bisa dicek)
+async function checkTopic(videoId) {
+  try {
+    const res = await fetch("https://music.youtube.com/youtubei/v1/player?alt=json", {
+      method: "POST",
+      headers: HEADERS,
+      body: JSON.stringify({ context: { client: CLIENT }, videoId })
+    })
+    if (!res.ok) return null
+    const data = await res.json()
+    const author = data?.videoDetails?.author
+    if (!author) return null
+    return author.endsWith(" - Topic")
+  } catch {
+    return null
   }
 }
