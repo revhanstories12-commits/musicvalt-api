@@ -1,6 +1,10 @@
 // Replace the current Cloudflare Worker code with this file.
-// Supports: songs (default), artists (high-res profile photo & subscriber count),
-// community playlists (high-res thumbnail & track count), or all combined.
+// Supports:
+// - ?q=...&type=song (default)
+// - ?q=...&type=artist
+// - ?q=...&type=playlist (with track count + browse fallback)
+// - ?q=...&type=all
+// - ?playlistId=VLPL... (fetch playlist metadata + tracks)
 
 addEventListener("fetch", event => {
   event.respondWith(handleRequest(event.request));
@@ -40,12 +44,18 @@ async function handleRequest(request) {
   if (request.method !== "GET") return jsonResponse({ error: "Gunakan metode GET." }, 405);
 
   const url = new URL(request.url);
+  const playlistId = (url.searchParams.get("playlistId") || "").trim();
   const query = (url.searchParams.get("q") || "").trim();
   const type = (url.searchParams.get("type") || "song").toLowerCase().trim();
 
-  if (!query) return jsonResponse({ error: "Parameter 'q' wajib diisi." }, 400);
-
   try {
+    if (playlistId) {
+      const detail = await fetchPlaylistDetail(playlistId);
+      return jsonResponse(detail);
+    }
+
+    if (!query) return jsonResponse({ error: "Parameter 'q' wajib diisi." }, 400);
+
     if (type === "all") {
       const [songs, artists, playlists] = await Promise.all([
         searchCategory(query, "song"),
@@ -84,6 +94,16 @@ async function searchCategory(query, type) {
 
   if (results.length === 0) {
     results = await searchWithRetry(query, null, type);
+  }
+
+  if (type === "playlist" && results.length > 0) {
+    results = await Promise.all(
+      results.map(async pl => {
+        if (pl.jumlahLagu !== "Tidak diketahui") return pl;
+        const count = await fetchPlaylistTrackCount(pl.id);
+        return count ? { ...pl, jumlahLagu: count } : pl;
+      })
+    );
   }
 
   return results;
@@ -126,7 +146,108 @@ async function searchWithRetry(query, params, type) {
   throw lastError || new Error("Permintaan pencarian gagal.");
 }
 
-// Ambil gambar resolusi tinggi (800px) tanpa dipaksa crop (-c)
+function parseTrackCountFromTexts(texts = []) {
+  for (const raw of texts) {
+    const text = String(raw || "").trim();
+    if (!text) continue;
+    // Abaikan teks yang jelas-jelas views / ditonton / durasi
+    if (/ditonton|views?|menit|jam|detik/i.test(text)) continue;
+
+    const labeledMatch = text.match(/([\d.,]+\s*(?:lagu|song|songs|track|tracks|video|videos))/i);
+    if (labeledMatch) return labeledMatch[1].trim();
+  }
+  return null;
+}
+
+async function fetchPlaylistTrackCount(browseId) {
+  try {
+    const normalizedId = browseId.startsWith("VL") ? browseId : `VL${browseId}`;
+    const response = await fetch("https://music.youtube.com/youtubei/v1/browse?alt=json", {
+      method: "POST",
+      headers: HEADERS,
+      body: JSON.stringify({
+        context: { client: CLIENT },
+        browseId: normalizedId
+      })
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+
+    const header = data.header?.musicDetailHeaderRenderer
+      || data.header?.musicResponsiveHeaderRenderer
+      || findObjectByKey(data, "musicResponsiveHeaderRenderer")
+      || findObjectByKey(data, "musicDetailHeaderRenderer");
+
+    const candidateTexts = [
+      ...(header?.secondSubtitle?.runs || []).map(r => r.text),
+      ...(header?.subtitle?.runs || []).map(r => r.text),
+      ...(header?.straplineTextOne?.runs || []).map(r => r.text)
+    ];
+
+    const fromHeader = parseTrackCountFromTexts(candidateTexts);
+    if (fromHeader) return fromHeader;
+
+    const shelf = findObjectByKey(data, "musicShelfRenderer");
+    const shelfTexts = (shelf?.subtitle?.runs || []).map(r => r.text);
+    const fromShelf = parseTrackCountFromTexts(shelfTexts);
+    if (fromShelf) return fromShelf;
+
+    const tracks = extractTracks(data);
+    if (tracks.length > 0) return `${tracks.length} lagu`;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchPlaylistDetail(browseId) {
+  const normalizedId = browseId.startsWith("VL") ? browseId : `VL${browseId}`;
+  const response = await fetch("https://music.youtube.com/youtubei/v1/browse?alt=json", {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      context: { client: CLIENT },
+      browseId: normalizedId
+    })
+  });
+  if (!response.ok) {
+    throw new Error(`YouTube Music HTTP ${response.status}`);
+  }
+  const data = await response.json();
+
+  const header = data.header?.musicDetailHeaderRenderer
+    || data.header?.musicResponsiveHeaderRenderer
+    || findObjectByKey(data, "musicResponsiveHeaderRenderer")
+    || findObjectByKey(data, "musicDetailHeaderRenderer");
+
+  const judul = (header?.title?.runs || []).map(r => r.text).join("").trim() || "Playlist";
+  const candidateTexts = [
+    ...(header?.secondSubtitle?.runs || []).map(r => r.text),
+    ...(header?.subtitle?.runs || []).map(r => r.text),
+    ...(header?.straplineTextOne?.runs || []).map(r => r.text)
+  ];
+
+  const tracks = extractTracks(data);
+  const jumlahLagu = parseTrackCountFromTexts(candidateTexts) || `${tracks.length} lagu`;
+
+  return {
+    id: normalizedId,
+    judul,
+    jumlahLagu,
+    tracks
+  };
+}
+
+function findObjectByKey(obj, targetKey) {
+  if (!obj || typeof obj !== "object") return null;
+  if (obj[targetKey]) return obj[targetKey];
+  for (const val of Object.values(obj)) {
+    const found = findObjectByKey(val, targetKey);
+    if (found) return found;
+  }
+  return null;
+}
+
 function getHighResThumbnail(item, mode = "song") {
   const thumbnails = item.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails
     || item.thumbnail?.thumbnails || [];
@@ -151,6 +272,20 @@ function getColumnRuns(item, index) {
   const columns = item.flexColumns || [];
   const runs = columns[index]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
   return runs.filter(run => run.text && !/^[\s·•|]+$/.test(run.text));
+}
+
+function getAllRuns(item) {
+  const columns = item.flexColumns || [];
+  const all = [];
+  for (const col of columns) {
+    const runs = col?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
+    for (const run of runs) {
+      if (run.text && !/^[\s·•|]+$/.test(run.text)) {
+        all.push(run);
+      }
+    }
+  }
+  return all;
 }
 
 function extractTracks(data) {
@@ -201,7 +336,7 @@ function extractArtists(data) {
 
       if (browseId.startsWith("UC") && (!pageType || pageType === "MUSIC_PAGE_TYPE_ARTIST")) {
         const titleRuns = getColumnRuns(item, 0);
-        const subRuns = getColumnRuns(item, 1);
+        const subRuns = getAllRuns(item).slice(1);
 
         const nama = titleRuns.map(r => r.text).join("").trim();
         const subText = subRuns.find(r => /subscriber|pelanggan/i.test(r.text))?.text
@@ -245,17 +380,22 @@ function extractPlaylists(data) {
 
       if (isPlaylist && browseId) {
         const titleRuns = getColumnRuns(item, 0);
-        const metaRuns = getColumnRuns(item, 1);
+        const allMetaRuns = getAllRuns(item).slice(titleRuns.length);
 
         const judul = titleRuns.map(r => r.text).join("").trim();
-        const countRun = metaRuns.find(r => /\d+\s*(lagu|song|track)/i.test(r.text));
-        const creatorRun = metaRuns.find(r =>
+
+        const countText = parseTrackCountFromTexts(allMetaRuns.map(r => r.text));
+        const jumlahLagu = countText || "Tidak diketahui";
+        const countRun = countText
+          ? allMetaRuns.find(r => r.text.toLowerCase().includes(countText.toLowerCase()))
+          : null;
+
+        const creatorRun = allMetaRuns.find(r =>
           r.navigationEndpoint?.browseEndpoint?.browseId?.startsWith("UC")
-          || (!/playlist/i.test(r.text) && r !== countRun)
+          || (!/playlist/i.test(r.text) && !/ditonton|views/i.test(r.text) && r !== countRun)
         );
 
         const thumbnail = getHighResThumbnail(item, "playlist");
-        const jumlahLagu = countRun ? countRun.text.trim() : "Tidak diketahui";
         const pembuat = creatorRun ? creatorRun.text.trim() : "Pengguna YouTube Music";
 
         if (judul && !seen.has(browseId)) {
