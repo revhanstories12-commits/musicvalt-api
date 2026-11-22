@@ -1,6 +1,6 @@
 // Replace the current Cloudflare Worker code with this file.
-// Supports: songs (default), artists (1:1 profile photo & subscriber count),
-// community playlists (thumbnail & track count), or all combined.
+// Supports: songs (default), artists (original profile photo & subscriber count),
+// community playlists (original thumbnail & track count), or all combined.
 
 addEventListener("fetch", event => {
   event.respondWith(handleRequest(event.request));
@@ -15,11 +15,10 @@ const CORS = {
 };
 const CLIENT = { clientName: "WEB_REMIX", clientVersion: "1.20231214.00.00", hl: "id", gl: "ID" };
 
-// Filter Protobuf params untuk YouTube Music InnerTube API
 const FILTERS = {
   song: "EgWKAQIIAWoKEAkQBRAKEAMQBA==",
   artist: "EgWKAQIgAWoKEAkQBRAKEAMQBA==",
-  playlist: "EgeKAQQoAEABagoQAxAEEAoQBRAJ" // Community playlists
+  playlist: "EgeKAQQoAEABagoQAxAEEAoQBRAJ"
 };
 
 const HEADERS = {
@@ -47,7 +46,6 @@ async function handleRequest(request) {
   if (!query) return jsonResponse({ error: "Parameter 'q' wajib diisi." }, 400);
 
   try {
-    // Mode gabungan: cari lagu, artis, dan playlist komunitas secara paralel
     if (type === "all") {
       const [songs, artists, playlists] = await Promise.all([
         searchCategory(query, "song"),
@@ -61,7 +59,6 @@ async function handleRequest(request) {
       });
     }
 
-    // Mode spesifik: song (default), artist, atau playlist
     if (!FILTERS[type]) {
       return jsonResponse({ error: "Parameter 'type' tidak valid. Gunakan: song, artist, playlist, atau all." }, 400);
     }
@@ -85,7 +82,6 @@ async function searchCategory(query, type) {
     results = await searchWithRetry(query, filterParam, type);
   }
 
-  // Fallback ke pencarian umum tanpa filter jika endpoint terfilter kosong sementara
   if (results.length === 0) {
     results = await searchWithRetry(query, null, type);
   }
@@ -130,35 +126,33 @@ async function searchWithRetry(query, params, type) {
   throw lastError || new Error("Permintaan pencarian gagal.");
 }
 
-// Helper untuk memperbesar resolusi gambar & memaksa rasio 1:1 jika squareCrop = true
-function upgradeThumbnail(item, squareCrop = false) {
+// Ambil URL gambar asli resolusi tertinggi tanpa dipaksa ubah rasio / 1:1
+function getOriginalThumbnail(item, keepOriginalUrl = false) {
   const thumbnails = item.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails
     || item.thumbnail?.thumbnails || [];
 
-  const exactSquare = thumbnails.find(t => t.width && t.height && t.width === t.height);
-  const chosen = exactSquare || thumbnails[thumbnails.length - 1] || {};
-  let url = chosen.url || "";
+  const chosen = thumbnails[thumbnails.length - 1] || {};
+  const url = chosen.url || "";
 
   if (!url) return "";
 
-  if (url.includes("googleusercontent.com") || url.includes("ggpht.com")) {
-    const baseUrl = url.split("=")[0];
-    return squareCrop
-      ? `${baseUrl}=s544-c-k-c0x00ffffff-no-rj`
-      : `${baseUrl}=w544-h544-l90-rj`;
+  if (keepOriginalUrl) {
+    return url;
+  }
+
+  if (url.includes("googleusercontent.com")) {
+    return `${url.split("=")[0]}=w544-h544-l90-rj`;
   }
 
   return url;
 }
 
-// Helper mengambil teks bersih per kolom
 function getColumnRuns(item, index) {
   const columns = item.flexColumns || [];
   const runs = columns[index]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
   return runs.filter(run => run.text && !/^[\s·•|]+$/.test(run.text));
 }
 
-// 1. Ekstrak Lagu
 function extractTracks(data) {
   const results = [];
   const seen = new Set();
@@ -179,7 +173,7 @@ function extractTracks(data) {
       const albumRun = meaningfulRuns.find(r => r.navigationEndpoint?.browseEndpoint?.browseId?.startsWith("MPRE"));
       const artist = artistRun?.text || meaningfulRuns[0]?.text || "Artis tidak diketahui";
       const album = albumRun?.text || artist;
-      const coverArt = upgradeThumbnail(item, false);
+      const coverArt = getOriginalThumbnail(item, false);
 
       if (id && !seen.has(id)) {
         seen.add(id);
@@ -193,7 +187,6 @@ function extractTracks(data) {
   return results;
 }
 
-// 2. Ekstrak Artis (Nama, Foto Profil 1:1, Jumlah Subscriber)
 function extractArtists(data) {
   const results = [];
   const seen = new Set();
@@ -214,7 +207,8 @@ function extractArtists(data) {
         const subText = subRuns.find(r => /subscriber|pelanggan/i.test(r.text))?.text
           || subRuns.find(r => r.text.toLowerCase() !== "artis" && r.text.toLowerCase() !== "artist")?.text
           || "Tidak diketahui";
-        const fotoProfil = upgradeThumbnail(item, true);
+        // Menggunakan URL gambar asli bawaan dari YouTube Music
+        const fotoProfil = getOriginalThumbnail(item, true);
 
         if (nama && !seen.has(browseId)) {
           seen.add(browseId);
@@ -234,7 +228,6 @@ function extractArtists(data) {
   return results;
 }
 
-// 3. Ekstrak Playlist Komunitas (Judul, Pembuat, Thumbnail, Jumlah Lagu)
 function extractPlaylists(data) {
   const results = [];
   const seen = new Set();
@@ -262,7 +255,8 @@ function extractPlaylists(data) {
           || (!/playlist/i.test(r.text) && r !== countRun)
         );
 
-        const thumbnail = upgradeThumbnail(item, false);
+        // Menggunakan URL thumbnail asli bawaan playlist
+        const thumbnail = getOriginalThumbnail(item, true);
         const jumlahLagu = countRun ? countRun.text.trim() : "Tidak diketahui";
         const pembuat = creatorRun ? creatorRun.text.trim() : "Pengguna YouTube Music";
 
