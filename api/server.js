@@ -4,7 +4,7 @@
 // - ?q=...&type=artist
 // - ?q=...&type=playlist (with track count + browse fallback)
 // - ?q=...&type=all
-// - ?playlistId=VLPL... (fetch playlist metadata + tracks)
+// - ?playlistId=VLPL... or PL... (fetch playlist metadata + full tracks)
 
 addEventListener("fetch", event => {
   event.respondWith(handleRequest(event.request));
@@ -37,6 +37,13 @@ function jsonResponse(body, status = 200) {
     status,
     headers: { "Content-Type": "application/json; charset=utf-8", ...CORS }
   });
+}
+
+function normalizePlaylistBrowseId(rawId) {
+  const cleaned = String(rawId || "").trim();
+  if (!cleaned) return "";
+  if (cleaned.startsWith("VL")) return cleaned;
+  return `VL${cleaned}`;
 }
 
 async function handleRequest(request) {
@@ -150,7 +157,6 @@ function parseTrackCountFromTexts(texts = []) {
   for (const raw of texts) {
     const text = String(raw || "").trim();
     if (!text) continue;
-    // Abaikan teks yang jelas-jelas views / ditonton / durasi
     if (/ditonton|views?|menit|jam|detik/i.test(text)) continue;
 
     const labeledMatch = text.match(/([\d.,]+\s*(?:lagu|song|songs|track|tracks|video|videos))/i);
@@ -159,19 +165,32 @@ function parseTrackCountFromTexts(texts = []) {
   return null;
 }
 
-async function fetchPlaylistTrackCount(browseId) {
+async function fetchBrowseData(browseId) {
+  const normalizedId = normalizePlaylistBrowseId(browseId);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
   try {
-    const normalizedId = browseId.startsWith("VL") ? browseId : `VL${browseId}`;
     const response = await fetch("https://music.youtube.com/youtubei/v1/browse?alt=json", {
       method: "POST",
       headers: HEADERS,
       body: JSON.stringify({
         context: { client: CLIENT },
         browseId: normalizedId
-      })
+      }),
+      signal: controller.signal
     });
-    if (!response.ok) return null;
-    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(`YouTube Music HTTP ${response.status}`);
+    }
+    return await response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchPlaylistTrackCount(browseId) {
+  try {
+    const data = await fetchBrowseData(browseId);
 
     const header = data.header?.musicDetailHeaderRenderer
       || data.header?.musicResponsiveHeaderRenderer
@@ -187,7 +206,8 @@ async function fetchPlaylistTrackCount(browseId) {
     const fromHeader = parseTrackCountFromTexts(candidateTexts);
     if (fromHeader) return fromHeader;
 
-    const shelf = findObjectByKey(data, "musicShelfRenderer");
+    const shelf = findObjectByKey(data, "musicPlaylistShelfRenderer")
+      || findObjectByKey(data, "musicShelfRenderer");
     const shelfTexts = (shelf?.subtitle?.runs || []).map(r => r.text);
     const fromShelf = parseTrackCountFromTexts(shelfTexts);
     if (fromShelf) return fromShelf;
@@ -201,19 +221,8 @@ async function fetchPlaylistTrackCount(browseId) {
 }
 
 async function fetchPlaylistDetail(browseId) {
-  const normalizedId = browseId.startsWith("VL") ? browseId : `VL${browseId}`;
-  const response = await fetch("https://music.youtube.com/youtubei/v1/browse?alt=json", {
-    method: "POST",
-    headers: HEADERS,
-    body: JSON.stringify({
-      context: { client: CLIENT },
-      browseId: normalizedId
-    })
-  });
-  if (!response.ok) {
-    throw new Error(`YouTube Music HTTP ${response.status}`);
-  }
-  const data = await response.json();
+  const normalizedId = normalizePlaylistBrowseId(browseId);
+  const data = await fetchBrowseData(normalizedId);
 
   const header = data.header?.musicDetailHeaderRenderer
     || data.header?.musicResponsiveHeaderRenderer
@@ -234,6 +243,7 @@ async function fetchPlaylistDetail(browseId) {
     id: normalizedId,
     judul,
     jumlahLagu,
+    totalTerambil: tracks.length,
     tracks
   };
 }
@@ -288,26 +298,40 @@ function getAllRuns(item) {
   return all;
 }
 
+function extractVideoIdFromItem(item) {
+  return item.playlistItemData?.videoId
+    || item.doubleTapCommand?.watchEndpoint?.videoId
+    || item.navigationEndpoint?.watchEndpoint?.videoId
+    || item.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId
+    || item.menu?.menuRenderer?.items
+      ?.map(m => m.menuNavigationItemRenderer?.navigationEndpoint?.watchEndpoint?.videoId
+        || m.menuServiceItemRenderer?.serviceEndpoint?.queueAddEndpoint?.queueTarget?.videoId)
+      .find(Boolean)
+    || "";
+}
+
 function extractTracks(data) {
   const results = [];
   const seen = new Set();
 
   function visit(value) {
     if (!value || typeof value !== "object") return;
+
+    // 1. Format standar list / playlist shelf di YouTube Music
     const item = value.musicResponsiveListItemRenderer;
     if (item) {
-      const id = item.playlistItemData?.videoId
-        || item.doubleTapCommand?.watchEndpoint?.videoId
-        || item.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId;
-
+      const id = extractVideoIdFromItem(item);
       const titleRuns = getColumnRuns(item, 0);
       const meaningfulRuns = getColumnRuns(item, 1);
+      const albumRuns = getColumnRuns(item, 2);
 
       const title = titleRuns.map(r => r.text).join("").trim();
       const artistRun = meaningfulRuns.find(r => r.navigationEndpoint?.browseEndpoint?.browseId?.startsWith("UC"));
-      const albumRun = meaningfulRuns.find(r => r.navigationEndpoint?.browseEndpoint?.browseId?.startsWith("MPRE"));
+      const albumRun = albumRuns.find(r => r.navigationEndpoint?.browseEndpoint?.browseId?.startsWith("MPRE"))
+        || meaningfulRuns.find(r => r.navigationEndpoint?.browseEndpoint?.browseId?.startsWith("MPRE"));
+
       const artist = artistRun?.text || meaningfulRuns[0]?.text || "Artis tidak diketahui";
-      const album = albumRun?.text || artist;
+      const album = albumRun?.text || albumRuns[0]?.text || artist;
       const coverArt = getHighResThumbnail(item, "song");
 
       if (id && !seen.has(id)) {
@@ -315,6 +339,24 @@ function extractTracks(data) {
         results.push({ id, judul: title || "Lagu tanpa judul", artis: artist, album, coverArt });
       }
     }
+
+    // 2. Format alternatif pada beberapa panel/playlist
+    const panelItem = value.playlistPanelVideoRenderer;
+    if (panelItem) {
+      const id = panelItem.videoId || panelItem.navigationEndpoint?.watchEndpoint?.videoId || "";
+      const title = (panelItem.title?.runs || []).map(r => r.text).join("").trim();
+      const bylineRuns = (panelItem.longBylineText?.runs || panelItem.shortBylineText?.runs || [])
+        .filter(r => r.text && !/^[\s·•|]+$/.test(r.text));
+      const artist = bylineRuns[0]?.text || "Artis tidak diketahui";
+      const album = bylineRuns.find(r => r.navigationEndpoint?.browseEndpoint?.browseId?.startsWith("MPRE"))?.text || artist;
+      const coverArt = getHighResThumbnail(panelItem, "song");
+
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        results.push({ id, judul: title || "Lagu tanpa judul", artis: artist, album, coverArt });
+      }
+    }
+
     for (const child of Object.values(value)) visit(child);
   }
 
