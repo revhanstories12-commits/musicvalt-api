@@ -1,5 +1,5 @@
 // Replace the current Cloudflare Worker code with this file.
-// Supports: songs (default), artists (profile photo & subscriber count),
+// Supports: songs (default), artists (1:1 profile photo & subscriber count),
 // community playlists (thumbnail & track count), or all combined.
 
 addEventListener("fetch", event => {
@@ -130,14 +130,24 @@ async function searchWithRetry(query, params, type) {
   throw lastError || new Error("Permintaan pencarian gagal.");
 }
 
-// Helper untuk memperbesar resolusi gambar googleusercontent / ytimg
-function upgradeThumbnail(item) {
+// Helper untuk memperbesar resolusi gambar & memaksa rasio 1:1 jika squareCrop = true
+function upgradeThumbnail(item, squareCrop = false) {
   const thumbnails = item.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails
     || item.thumbnail?.thumbnails || [];
-  let url = thumbnails.length ? thumbnails[thumbnails.length - 1].url || "" : "";
-  if (url.includes("googleusercontent.com")) {
-    url = `${url.split("=")[0]}=w544-h544-l90-rj`;
+
+  const exactSquare = thumbnails.find(t => t.width && t.height && t.width === t.height);
+  const chosen = exactSquare || thumbnails[thumbnails.length - 1] || {};
+  let url = chosen.url || "";
+
+  if (!url) return "";
+
+  if (url.includes("googleusercontent.com") || url.includes("ggpht.com")) {
+    const baseUrl = url.split("=")[0];
+    return squareCrop
+      ? `${baseUrl}=s544-c-k-c0x00ffffff-no-rj`
+      : `${baseUrl}=w544-h544-l90-rj`;
   }
+
   return url;
 }
 
@@ -169,7 +179,7 @@ function extractTracks(data) {
       const albumRun = meaningfulRuns.find(r => r.navigationEndpoint?.browseEndpoint?.browseId?.startsWith("MPRE"));
       const artist = artistRun?.text || meaningfulRuns[0]?.text || "Artis tidak diketahui";
       const album = albumRun?.text || artist;
-      const coverArt = upgradeThumbnail(item);
+      const coverArt = upgradeThumbnail(item, false);
 
       if (id && !seen.has(id)) {
         seen.add(id);
@@ -183,7 +193,7 @@ function extractTracks(data) {
   return results;
 }
 
-// 2. Ekstrak Artis (Nama, Foto Profil, Jumlah Subscriber)
+// 2. Ekstrak Artis (Nama, Foto Profil 1:1, Jumlah Subscriber)
 function extractArtists(data) {
   const results = [];
   const seen = new Set();
@@ -196,17 +206,15 @@ function extractArtists(data) {
       const browseId = browseEndpoint?.browseId || "";
       const pageType = browseEndpoint?.browseEndpointContextSupportedConfigs?.browseEndpointContextMusicConfig?.pageType || "";
 
-      // Pastikan item benar-benar channel artis (UC... / MUSIC_PAGE_TYPE_ARTIST)
       if (browseId.startsWith("UC") && (!pageType || pageType === "MUSIC_PAGE_TYPE_ARTIST")) {
         const titleRuns = getColumnRuns(item, 0);
         const subRuns = getColumnRuns(item, 1);
 
         const nama = titleRuns.map(r => r.text).join("").trim();
-        // Cari teks yang mengandung kata "subscriber" atau "pelanggan" (misal: "12,4 jt subscriber")
         const subText = subRuns.find(r => /subscriber|pelanggan/i.test(r.text))?.text
           || subRuns.find(r => r.text.toLowerCase() !== "artis" && r.text.toLowerCase() !== "artist")?.text
           || "Tidak diketahui";
-        const fotoProfil = upgradeThumbnail(item);
+        const fotoProfil = upgradeThumbnail(item, true);
 
         if (nama && !seen.has(browseId)) {
           seen.add(browseId);
@@ -239,7 +247,6 @@ function extractPlaylists(data) {
       const browseId = browseEndpoint?.browseId || "";
       const pageType = browseEndpoint?.browseEndpointContextSupportedConfigs?.browseEndpointContextMusicConfig?.pageType || "";
 
-      // Playlist komunitas memiliki prefix VLPL / PL / OLAK dengan pageType PLAYLIST
       const isPlaylist = pageType === "MUSIC_PAGE_TYPE_PLAYLIST"
         || browseId.startsWith("VLPL")
         || browseId.startsWith("PL");
@@ -249,15 +256,13 @@ function extractPlaylists(data) {
         const metaRuns = getColumnRuns(item, 1);
 
         const judul = titleRuns.map(r => r.text).join("").trim();
-        // Cari jumlah lagu (misal: "45 lagu" atau "120 songs")
         const countRun = metaRuns.find(r => /\d+\s*(lagu|song|track)/i.test(r.text));
-        // Cari nama pembuat playlist (biasanya memiliki browseId UC... atau bukan label "Playlist")
         const creatorRun = metaRuns.find(r =>
           r.navigationEndpoint?.browseEndpoint?.browseId?.startsWith("UC")
           || (!/playlist/i.test(r.text) && r !== countRun)
         );
 
-        const thumbnail = upgradeThumbnail(item);
+        const thumbnail = upgradeThumbnail(item, false);
         const jumlahLagu = countRun ? countRun.text.trim() : "Tidak diketahui";
         const pembuat = creatorRun ? creatorRun.text.trim() : "Pengguna YouTube Music";
 
