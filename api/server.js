@@ -1,6 +1,6 @@
 // Replace the current Cloudflare Worker code with this file.
-// Supports: songs (default), artists (original profile photo & subscriber count),
-// community playlists (original thumbnail & track count), or all combined.
+// Supports: songs (default), artists (high-res profile photo & subscriber count),
+// community playlists (high-res thumbnail & track count), or all combined.
 
 addEventListener("fetch", event => {
   event.respondWith(handleRequest(event.request));
@@ -126,8 +126,8 @@ async function searchWithRetry(query, params, type) {
   throw lastError || new Error("Permintaan pencarian gagal.");
 }
 
-// Ambil URL gambar asli resolusi tertinggi tanpa dipaksa ubah rasio / 1:1
-function getOriginalThumbnail(item, keepOriginalUrl = false) {
+// Ambil gambar resolusi tinggi (800px) tanpa dipaksa crop (-c)
+function getHighResThumbnail(item, mode = "song") {
   const thumbnails = item.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails
     || item.thumbnail?.thumbnails || [];
 
@@ -136,12 +136,12 @@ function getOriginalThumbnail(item, keepOriginalUrl = false) {
 
   if (!url) return "";
 
-  if (keepOriginalUrl) {
-    return url;
-  }
-
-  if (url.includes("googleusercontent.com")) {
-    return `${url.split("=")[0]}=w544-h544-l90-rj`;
+  if (url.includes("googleusercontent.com") || url.includes("ggpht.com")) {
+    const baseUrl = url.split("=")[0];
+    if (mode === "artist") {
+      return `${baseUrl}=s800-no-rj`;
+    }
+    return `${baseUrl}=w800-h800-l90-rj`;
   }
 
   return url;
@@ -173,7 +173,7 @@ function extractTracks(data) {
       const albumRun = meaningfulRuns.find(r => r.navigationEndpoint?.browseEndpoint?.browseId?.startsWith("MPRE"));
       const artist = artistRun?.text || meaningfulRuns[0]?.text || "Artis tidak diketahui";
       const album = albumRun?.text || artist;
-      const coverArt = getOriginalThumbnail(item, false);
+      const coverArt = getHighResThumbnail(item, "song");
 
       if (id && !seen.has(id)) {
         seen.add(id);
@@ -207,8 +207,7 @@ function extractArtists(data) {
         const subText = subRuns.find(r => /subscriber|pelanggan/i.test(r.text))?.text
           || subRuns.find(r => r.text.toLowerCase() !== "artis" && r.text.toLowerCase() !== "artist")?.text
           || "Tidak diketahui";
-        // Menggunakan URL gambar asli bawaan dari YouTube Music
-        const fotoProfil = getOriginalThumbnail(item, true);
+        const fotoProfil = getHighResThumbnail(item, "artist");
 
         if (nama && !seen.has(browseId)) {
           seen.add(browseId);
@@ -255,8 +254,7 @@ function extractPlaylists(data) {
           || (!/playlist/i.test(r.text) && r !== countRun)
         );
 
-        // Menggunakan URL thumbnail asli bawaan playlist
-        const thumbnail = getOriginalThumbnail(item, true);
+        const thumbnail = getHighResThumbnail(item, "playlist");
         const jumlahLagu = countRun ? countRun.text.trim() : "Tidak diketahui";
         const pembuat = creatorRun ? creatorRun.text.trim() : "Pengguna YouTube Music";
 
